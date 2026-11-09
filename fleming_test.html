@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>fleming test</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { max-width: 760px; margin: 32px auto; padding: 0 16px; font: 14px system-ui, sans-serif; color: #222; }
+    textarea, pre, #output { width: 100%; border: 1px solid #ddd; border-radius: 4px; background: #fff; }
+    textarea { min-height: 266px; padding: 12px; font: 14px/20px monospace; resize: vertical; }
+    button { margin: 12px 0; padding: 8px 20px; cursor: pointer; }
+    #output { min-height: 180px; padding: 16px; display: grid; place-items: center; }
+    #output > svg { width: 100%; max-width: 480px; max-height: 240px; }
+    pre { min-height: 100px; padding: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  <textarea id="source" aria-label="コード記述エリア" spellcheck="false" rows="12">circuit {
+  op {
+    Opamp: leads=True
+  }
+  Line: down="d.unit/4" at="op.in2"
+  Ground: lead=False
+  Rin {
+    Resistor: at="op.in1" left idot label="'$R_{in}$' loc='bot'" label="'$v_{in}$' loc='left'"
+  }
+  Line: up="d.unit/2" at="op.in1"
+  Resistor: tox="op.out" label="'$R_f$'"
+  Line: toy="op.out" dot
+  Line: right="d.unit/4" at="op.out" label="'$v_{o}$' loc='right'"
+}</textarea>
+  <button id="render" type="button">Render</button>
+  <div id="output" aria-label="SVG画像表示エリア"></div>
+  <pre id="log" aria-label="処理ログ表示エリア" aria-live="polite"></pre>
+  <script src="fleming.js"></script>
+  <script>
+    document.getElementById('render').addEventListener('click', () => {
+      const output = document.getElementById('output');
+      const log = document.getElementById('log');
+      output.replaceChildren();
+      log.textContent = '';
+      const report = message => { log.textContent += message + '\n'; };
+      try {
+        output.innerHTML = Fleming.render(document.getElementById('source').value, report);
+      } catch (error) {
+        report('エラー: ' + error.message);
+      }
+    });
+  </script>
+</body>
+</html>

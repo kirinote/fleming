@@ -40,12 +40,13 @@
     Inductor: 'M 0,0 L 36,0 M 36,0 a 4.5,4.5 0 1 1 9,0 M 45,0 a 4.5,4.5 0 1 1 9,0 M 54,0 a 4.5,4.5 0 1 1 9,0 M 63,0 a 4.5,4.5 0 1 1 9,0 M 72,0 L 108,0',
     Diode: 'M 0,0 L 47.7,0 M 47.7,-9 L 60.3,0 L 47.7,9 Z M 60.3,-9 L 60.3,9 M 60.3,0 L 108,0',
     Line: 'M 0,0 L 108,0',
+    Source: 'M 0,0 L 36,0 M 72,0 L 108,0',
     SourceV: 'M 0,0 L 36,0 M 72,0 L 108,0 M 45,-3.6 L 45,3.6 M 59.4,0 L 66.6,0 M 63,-3.6 L 63,3.6',
     SourceSin: 'M 0,0 L 36,0 M 72,0 L 108,0 M 54,9 L 55.863,8.25 L 57.6,7.5 L 59.091,6.75 L 60.235,6 L 60.955,5.25 L 61.2,4.5 L 60.955,3.75 L 60.235,3 L 59.091,2.25 L 57.6,1.5 L 55.863,0.75 L 54,0 L 52.137,-0.75 L 50.4,-1.5 L 48.909,-2.25 L 47.765,-3 L 47.045,-3.75 L 46.8,-4.5 L 47.045,-5.25 L 47.765,-6 L 48.909,-6.75 L 50.4,-7.5 L 52.137,-8.25 L 54,-9'
   };
 
   // Lengths are in the same 36 SVG units per schemdraw unit as the examples.
-  const unit = 108;
+  const defaultUnit = 108;
   const directions = { right: [1, 0, 0], down: [0, 1, 90], left: [-1, 0, 180], up: [0, -1, -90] };
 
   // CSS named colors also accepted by Schemdraw's color validator.
@@ -87,22 +88,22 @@
       const match = /^([A-Za-z_]\w*)\s*:\s*(.*)$/.exec(line);
       if (!match) throw new Error(`部品の記述を解析できません: ${line}`);
       const args = [], input = match[2];
-      const token = /\s*([A-Za-z_]\w*)(?:\s*=\s*(?:"([^"\r\n]*)"|([^\s]+)))?/gy;
+      const token = /\s*([A-Za-z_]\w*)(?:\s*=\s*(?:"((?:\\\\|\\"|[^"\\\r\n]|\\(?!["\\]))*)"|([^\s]+)))?/gy;
       while (token.lastIndex < input.length) {
         const at = token.lastIndex, m = token.exec(input);
         if (!m || token.lastIndex === at) throw new Error(`引数を解析できません: ${input.slice(at)}`);
-        args.push({ key: m[1], value: m[2] !== undefined ? m[2] : m[3] });
+        args.push({ key: m[1], value: m[2] !== undefined ? m[2].replace(/\\\\|\\"/g, s => s === '\\"' ? '"' : s) : m[3] });
       }
       const namedFrame = frames.find(frame => frame.kind === 'name');
       if (namedFrame) namedFrame.count++;
       records.push({ type: match[1], name: namedFrame ? namedFrame.name : null, args });
     }
     if (!closed || frames.length) throw new Error('ブロックの閉じ括弧が不足しています。');
-    if (!records.some(record => !record.type.startsWith('__hold_') && !['move', 'move_from', 'print'].includes(record.type))) throw new Error('部品を1個以上指定してください。');
+    if (!records.some(record => !record.type.startsWith('__hold_') && !['config', 'move', 'move_from', 'print'].includes(record.type))) throw new Error('部品を1個以上指定してください。');
     return records;
   }
 
-  function readLength(value) {
+  function readLength(value, unit) {
     if (/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(value || '')) {
       const result = Number(value) * 36;
       if (!Number.isFinite(result) || result <= 0) throw new Error(`不正な長さです: ${value}`);
@@ -114,7 +115,7 @@
   }
 
   // Drawing.move uses signed drawing-unit offsets, not SVG coordinates.
-  function readMove(value) {
+  function readMove(value, unit) {
     if (typeof value !== 'string') throw new Error('move の座標には数値または d.unit を指定してください。');
     const match = /^([+-]?)(?:(\d+(?:\.\d*)?|\.\d+)|d\.unit(?:\s*\/\s*(\d+(?:\.\d+)?))?)$/.exec(value);
     if (!match) throw new Error(`対応していない move の座標: ${value}`);
@@ -143,10 +144,37 @@
       if (!items.length || rest !== ']') throw new Error(`リストラベルが不正です: ${value}`);
       return { items, loc: null };
     }
-    if (!value.startsWith("'")) return { text: value, loc: null };
-    const m = /^'((?:[^'\\]|\\['\\])*)'(?:\s+loc\s*=\s*'(top|bot|left|right)')?$/.exec(value);
-    if (!m) throw new Error(`label の引数が不正です: ${value}`);
-    return { text: m[1].replace(/\\(['\\])/g, '$1'), loc: m[2] || null };
+    if (!value.startsWith("'")) return { text: value, loc: null, halign: null, ofst: null };
+    const text = /^'((?:[^'\\]|\\['\\])*)'/.exec(value);
+    if (!text) throw new Error(`label の引数が不正です: ${value}`);
+    const label = { text: text[1].replace(/\\(['\\])/g, '$1'), loc: null, halign: null, ofst: null };
+    let rest = value.slice(text[0].length);
+    const seen = new Set();
+    while (rest) {
+      const separator = /^\s+/.exec(rest);
+      if (!separator) throw new Error(`label の引数が不正です: ${value}`);
+      rest = rest.slice(separator[0].length);
+      if (!rest) {
+        break;
+      }
+      const arg = /^(loc|halign)\s*=\s*'(\w+)'|^(ofst)\s*=\s*\(\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s+([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*\)/.exec(rest);
+      if (!arg) throw new Error(`label の引数が不正です: ${value}`);
+      const key = arg[1] || arg[3];
+      if (seen.has(key)) throw new Error(`label の引数が重複しています: ${key}`);
+      seen.add(key);
+      if (key === 'loc') {
+        if (!['top', 'bot', 'left', 'right', 'start', 'end'].includes(arg[2])) throw new Error(`label の位置が不正です: ${arg[2]}`);
+        label.loc = arg[2];
+      } else if (key === 'halign') {
+        if (!['left', 'center', 'right'].includes(arg[2])) throw new Error(`label の配置が不正です: ${arg[2]}`);
+        label.halign = arg[2];
+      } else {
+        label.ofst = [Number(arg[4]), Number(arg[5])];
+        if (!label.ofst.every(Number.isFinite)) throw new Error(`label のオフセットが不正です: ${value}`);
+      }
+      rest = rest.slice(arg[0].length);
+    }
+    return label;
   }
 
   function labelContent(text) {
@@ -164,7 +192,7 @@
     const records = parse(source);
     log('circuit ブロックを検出しました。');
     const elements = [], names = Object.create(null), heldStates = [];
-    let x = 0, y = 0, direction = 'right';
+    let x = 0, y = 0, direction = 'right', unit = defaultUnit;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     const bounds = (x1, y1, x2, y2) => {
       minX = Math.min(minX, x1, x2); maxX = Math.max(maxX, x1, x2);
@@ -175,10 +203,26 @@
       if (!m || !Object.prototype.hasOwnProperty.call(names, m[1]) || !Object.prototype.hasOwnProperty.call(names[m[1]], m[2])) throw new Error(`不明な端子参照: ${ref}`);
       return names[m[1]][m[2]];
     };
+    const atPoint = value => {
+      const n = '[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)';
+      const match = new RegExp(`^\\(\\s*(${n})\\s+(${n})\\s*\\)$`).exec(value);
+      if (!match) return point(value);
+      const px = Number(match[1]) * 36, py = -Number(match[2]) * 36;
+      if (!Number.isFinite(px) || !Number.isFinite(py)) throw new Error('at の座標は有限の数値で指定してください。');
+      return [px, py];
+    };
     for (const record of records) {
       const { type, name, args } = record;
       if (type === '__hold_start') { heldStates.push([x, y, direction]); continue; }
       if (type === '__hold_end') { [x, y, direction] = heldStates.pop(); continue; }
+      if (type === 'config') {
+        if (name || args.length !== 1 || args[0].key !== 'unit' || typeof args[0].value !== 'string' || !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(args[0].value)) throw new Error('対応形式: config: unit="2"');
+        const value = Number(args[0].value);
+        if (!Number.isFinite(value) || value <= 0 || !Number.isFinite(value * 36)) throw new Error('config の unit は有限の正の数を指定してください。');
+        unit = value * 36;
+        log(`config: unit=${value}`);
+        continue;
+      }
       if (type === 'print') {
         if (name || args.length !== 1 || args[0].key !== 'value' || args[0].value !== 'd.here') throw new Error('対応形式: print: value="d.here"');
         const clean = n => Math.abs(n) < 1e-12 ? 0 : Number(n.toPrecision(12));
@@ -194,7 +238,7 @@
           if (key === 'at') {
             if (typeof value !== 'string') throw new Error('move_from の at に端子を指定してください。');
             offsets[key] = value;
-          } else offsets[key] = readMove(value);
+          } else offsets[key] = readMove(value, unit);
         }
         if (type === 'move_from') {
           if (!Object.prototype.hasOwnProperty.call(offsets, 'at')) throw new Error('move_from に at を指定してください。');
@@ -206,7 +250,8 @@
         continue;
       }
       const previousState = [x, y, direction];
-      if (!['Resistor', 'Capacitor', 'Inductor', 'Diode', 'Line', 'Dot', 'SourceSin', 'SourceV', 'Gap', 'Opamp', 'Ground', 'BjtNpn'].includes(type)) throw new Error(`未対応の部品: ${type}`);
+      if (!['Resistor', 'Capacitor', 'Inductor', 'Diode', 'Zener', 'Line', 'Wire', 'Dot', 'Source', 'SourceSin', 'SourceV', 'Gap', 'Opamp', 'Ground', 'BjtNpn'].includes(type)) throw new Error(`未対応の部品: ${type}`);
+      const isSource = ['Source', 'SourceV', 'SourceSin'].includes(type);
       if (name && Object.prototype.hasOwnProperty.call(names, name)) throw new Error(`部品名が重複しています: ${name}`);
       const options = Object.create(null), labels = [];
       let selectedDirection = null, length = null;
@@ -214,36 +259,124 @@
         if (Object.prototype.hasOwnProperty.call(directions, key)) {
           if (selectedDirection) throw new Error('方向を複数指定できません。');
           selectedDirection = key;
-          if (value !== undefined) length = readLength(value);
+          if (value !== undefined) length = readLength(value, unit);
         } else if (key === 'label') labels.push(readLabel(value));
         else {
-          if (!['at', 'tox', 'toy', 'anchor', 'theta', 'color', 'drop', 'idot', 'dot', 'leads', 'lead', 'hold', 'reverse', 'length'].includes(key)) throw new Error(`未対応の引数: ${key}`);
+          if (!['at', 'to', 'tox', 'toy', 'endpoints', 'anchor', 'theta', 'color', 'drop', 'shift', 'idot', 'dot', 'leads', 'lead', 'hold', 'flip', 'reverse', 'length', 'shape', 'k', 'arrow'].includes(key)) throw new Error(`未対応の引数: ${key}`);
           if (Object.prototype.hasOwnProperty.call(options, key)) throw new Error(`引数が重複しています: ${key}`);
           options[key] = value === undefined ? true : value;
         }
       }
-      for (const key of ['idot', 'dot', 'hold', 'reverse']) if (key in options && options[key] !== true) throw new Error(`${key} は引数なしで指定してください。`);
-      for (const key of ['at', 'tox', 'toy']) if (key in options && typeof options[key] !== 'string') throw new Error(`${key} に端子を指定してください。`);
+      for (const key of ['idot', 'dot', 'hold', 'flip', 'reverse']) if (key in options && options[key] !== true) throw new Error(`${key} は引数なしで指定してください。`);
+      for (const key of ['at', 'to', 'tox', 'toy']) if (key in options && typeof options[key] !== 'string') throw new Error(`${key} に端子を指定してください。`);
+      if ('endpoints' in options && typeof options.endpoints !== 'string') throw new Error('endpoints に始点と終点を指定してください。');
+      if ('endpoints' in options && ['at', 'to', 'tox', 'toy'].some(key => key in options)) throw new Error('endpoints と at・to・tox・toy は同時に指定できません。');
       const color = 'color' in options ? readColor(options.color) : 'black';
       const stroke = `fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"`;
       const textFill = 'color' in options ? ` fill="${color}"` : '';
+      if (type !== 'Wire' && (['shape', 'k'].some(key => key in options) || (type !== 'Line' && 'arrow' in options))) throw new Error(`${type} では Wire の引数を使用できません。`);
+      if (type === 'Line' && 'arrow' in options && !['->', '<-', '<->', '|->', '|-o'].includes(options.arrow)) throw new Error('Line の arrow が不正です。');
+      if (type === 'Wire') {
+        if (selectedDirection || length !== null || Object.keys(options).some(key => !['at', 'to', 'shape', 'k', 'arrow', 'color'].includes(key))) throw new Error('Wire は shape、k、arrow、at、to、color、label に対応しています。');
+        const wireShape = options.shape === undefined ? '-' : options.shape;
+        if (!['-', '-|', '|-', 'z', 'N', 'n', 'c'].includes(wireShape)) throw new Error(`未対応の Wire shape: ${wireShape}`);
+        if ('arrow' in options && options.arrow !== '->') throw new Error('Wire の arrow は -> のみ対応しています。');
+        let k = 36;
+        if ('k' in options) {
+          if (typeof options.k !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.k) || !Number.isFinite(Number(options.k) * 36)) throw new Error('Wire の k は有限の数値で指定してください。');
+          k = Number(options.k) * 36;
+        }
+        if ('at' in options) [x, y] = atPoint(options.at);
+        const start = [x, y], end = 'to' in options ? point(options.to) : [108, 72];
+        const dx = end[0] - x, dy = end[1] - y;
+        let vertices, mid;
+        if (wireShape === '-') { vertices = [start, end]; mid = [x + dx / 2, y + dy / 2]; }
+        else if (wireShape === '-|') { vertices = [start, [end[0], y], end]; mid = [end[0], y + dy / 2]; direction = dy < 0 ? 'up' : 'down'; }
+        else if (wireShape === '|-') { vertices = [start, [x, end[1]], end]; mid = [x + dx / 2, end[1]]; direction = dx > 0 ? 'right' : 'left'; }
+        else if (wireShape === 'z') { const step = dx > 0 ? Math.abs(k) : -Math.abs(k); vertices = [start, [x + step, y], [end[0] - step, end[1]], end]; mid = [x + dx / 2, y + dy / 2]; direction = dx > 0 ? 'right' : 'left'; }
+        else if (wireShape === 'N') { const step = dy < 0 ? -Math.abs(k) : Math.abs(k); vertices = [start, [x, y + step], [end[0], end[1] - step], end]; mid = [x + dx / 2, y + dy / 2]; direction = dy < 0 ? 'up' : 'down'; }
+        else if (wireShape === 'n') { vertices = [start, [x, y - k], [end[0], y - k], end]; mid = [x + dx / 2, y - k]; direction = -dy > k ? 'up' : 'down'; }
+        else { vertices = [start, [x + k, y], [x + k, end[1]], end]; mid = [x + k, y + dy / 2]; direction = dx > k ? 'right' : 'left'; }
+        if (vertices.some(p => p.some(n => !Number.isFinite(n)))) throw new Error('Wire の座標が大きすぎます。');
+        const path = vertices.map((p, i) => `${i ? 'L' : 'M'} ${p[0]},${p[1]}`).join(' ');
+        elements.push(`<path d="${path}" ${stroke}/>`);
+        for (const [vx, vy] of vertices) bounds(vx - 2, vy - 2, vx + 2, vy + 2);
+        if ('arrow' in options) {
+          let i = vertices.length - 2;
+          while (i >= 0 && vertices[i][0] === end[0] && vertices[i][1] === end[1]) i--;
+          if (i < 0) throw new Error('長さがゼロの Wire に矢印を付けられません。');
+          const ax = end[0] - vertices[i][0], ay = end[1] - vertices[i][1], len = Math.hypot(ax, ay);
+          const ux = ax / len, uy = ay / len, bx = end[0] - 9 * ux, by = end[1] - 9 * uy;
+          const corners = [[bx - 2.7 * uy, by + 2.7 * ux], [bx + 2.7 * uy, by - 2.7 * ux]];
+          elements.push(`<path d="M ${end[0]},${end[1]} L ${corners[0][0]},${corners[0][1]} L ${corners[1][0]},${corners[1][1]} Z" fill="${color}" stroke="${color}"/>`);
+          for (const [vx, vy] of corners) bounds(vx - 1, vy - 1, vx + 1, vy + 1);
+        }
+        const anchors = { start, end, mid, xy: start };
+        const xs = vertices.map(p => p[0]), ys = vertices.map(p => p[1]);
+        const left = Math.min(...xs), right = Math.max(...xs), top = Math.min(...ys), bottom = Math.max(...ys);
+        for (const label of labels) {
+          if (label.items || typeof label.text !== 'string') throw new Error('Wire のリストラベルには対応していません。');
+          const loc = label.loc || 'mid';
+          let lx, ly, ha = 'center', va = 'center';
+          if (Object.prototype.hasOwnProperty.call(anchors, loc)) {
+            [lx, ly] = anchors[loc];
+            ha = Math.abs(lx - left) <= 5.4 ? 'right' : Math.abs(lx - right) <= 5.4 ? 'left' : 'center';
+            va = Math.abs(ly - bottom) <= 5.4 ? 'top' : Math.abs(ly - top) <= 5.4 ? 'bottom' : 'center';
+          } else if (loc === 'center') { lx = (left + right) / 2; ly = (top + bottom) / 2; }
+          else if (loc === 'top') { lx = (left + right) / 2; ly = top; va = 'bottom'; }
+          else if (loc === 'bot' || loc === 'bottom') { lx = (left + right) / 2; ly = bottom; va = 'top'; }
+          else if (loc === 'left') { lx = left; ly = (top + bottom) / 2; ha = 'right'; }
+          else if (loc === 'right') { lx = right; ly = (top + bottom) / 2; ha = 'left'; }
+          else throw new Error(`未対応の Wire label loc: ${loc}`);
+          if (label.ofst == null) {
+            const offset = 3.6;
+            lx += ha === 'left' ? offset : ha === 'right' ? -offset : 0;
+            ly += va === 'top' ? offset : va === 'bottom' ? -offset : (Object.prototype.hasOwnProperty.call(anchors, loc) ? -offset : 0);
+          } else {
+            const ox = label.ofst[0] * 36, oy = label.ofst[1] * 36;
+            if (!Number.isFinite(ox) || !Number.isFinite(oy)) throw new Error('Wire label の ofst は有限の数値で指定してください。');
+            lx += ox; ly -= oy;
+          }
+          ha = label.halign || ha;
+          if (!['left', 'right', 'center'].includes(ha)) throw new Error(`不正な label halign: ${ha}`);
+          const anchor = { left: 'start', right: 'end', center: 'middle' }[ha];
+          const baseline = va === 'top' ? 'hanging' : va === 'bottom' ? 'auto' : 'central';
+          const visible = label.text.startsWith('$') && label.text.endsWith('$') ? label.text.replace(/[$_{}]/g, '') : label.text;
+          const width = Math.max(12, Array.from(visible).length * 10);
+          bounds(lx - (ha === 'right' ? width : ha === 'center' ? width / 2 : 0), ly - 18, lx + (ha === 'left' ? width : ha === 'center' ? width / 2 : 0), ly + 18);
+          elements.push(`<text x="${lx}" y="${ly}" text-anchor="${anchor}" dominant-baseline="${baseline}"${textFill} font-family="sans-serif" font-size="14">${labelContent(label.text)}</text>`);
+        }
+        if (name) names[name] = anchors;
+        [x, y] = end;
+        log(`Wire: shape=${wireShape}`);
+        continue;
+      }
+      if (labels.some(label => (type !== 'Dot' && (label.halign != null || label.ofst != null)) || ['start', 'end'].includes(label.loc))) throw new Error(`${type} の指定された label 引数には対応していません。`);
       if ('anchor' in options && (type !== 'Opamp' || typeof options.anchor !== 'string')) throw new Error('anchor は現在 Opamp の端子名のみ対応しています。');
       if ('drop' in options && (type !== 'BjtNpn' || typeof options.drop !== 'string')) throw new Error('drop は現在 BjtNpn の端子名のみ対応しています。');
       if (('leads' in options && type !== 'Opamp') || ('lead' in options && type !== 'Ground')) throw new Error(`${type} ではそのコンストラクタ引数を使用できません。`);
-      if ('reverse' in options && type !== 'SourceV') throw new Error(`${type} の reverse には対応していません。`);
+      if ('reverse' in options && !['SourceV', 'Zener'].includes(type)) throw new Error(`${type} の reverse には対応していません。`);
+      if ('flip' in options && type !== 'Zener') throw new Error(`${type} の flip には対応していません。`);
+      let shift = 0;
+      if ('shift' in options) {
+        if (['BjtNpn', 'Dot', 'Opamp', 'Ground'].includes(type)) throw new Error(`${type} の shift には対応していません。`);
+        if (typeof options.shift !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.shift) || !Number.isFinite(Number(options.shift))) throw new Error('shift は有限の数値で指定してください。');
+        shift = Number(options.shift);
+      }
       if ('theta' in options) {
         if (type === 'Opamp' || type === 'Ground' || type === 'Dot') throw new Error(`${type} の theta には対応していません。`);
         if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta は有限の数値で指定してください。');
-        if (selectedDirection || 'tox' in options || 'toy' in options) throw new Error('theta と方向・tox・toy は同時に指定できません。');
+        if (selectedDirection || 'endpoints' in options || 'to' in options || 'tox' in options || 'toy' in options) throw new Error('theta と方向・endpoints・to・tox・toy は同時に指定できません。');
       }
       if ('length' in options) {
         if (length !== null) throw new Error('長さを複数指定できません。');
         if (typeof options.length !== 'string') throw new Error('length の値を指定してください。');
-        length = readLength(options.length);
+        length = readLength(options.length, unit);
       }
-      if ('at' in options) [x, y] = point(options.at);
+      if ('endpoints' in options && (['BjtNpn', 'Dot', 'Opamp', 'Ground'].includes(type) || selectedDirection || length !== null)) throw new Error(`${type} の endpoints と、この指定の組み合わせには対応していません。`);
+      if ('at' in options) [x, y] = atPoint(options.at);
       if (type === 'BjtNpn') {
-        if (length !== null || labels.length || 'tox' in options || 'toy' in options || 'idot' in options || 'dot' in options || 'hold' in options) throw new Error('BjtNpn は現在 at、方向、theta、color、drop に対応しています。');
+        if (length !== null || labels.length || 'to' in options || 'tox' in options || 'toy' in options || 'idot' in options || 'dot' in options || 'hold' in options) throw new Error('BjtNpn は現在 at、方向、theta、color、drop に対応しています。');
         if ('theta' in options) {
           const degrees = ((Number(options.theta) % 360) + 360) % 360;
           direction = ({ 0: 'right', 90: 'up', 180: 'left', 270: 'down' })[degrees] || Number(options.theta);
@@ -270,15 +403,38 @@
         continue;
       }
       if (type === 'Dot') {
-        if (selectedDirection || length !== null || labels.length || 'tox' in options || 'toy' in options || 'idot' in options || 'dot' in options || 'hold' in options) throw new Error('Dot は現在 at と color に対応しています。');
+        if (selectedDirection || length !== null || 'to' in options || 'tox' in options || 'toy' in options || 'idot' in options || 'dot' in options || 'hold' in options) throw new Error('Dot は現在 at、color、label に対応しています。');
         elements.push(`<circle cx="${x}" cy="${y}" r="2.7" fill="${color}" stroke="${color}" stroke-width="2"/>`);
         bounds(x - 3.7, y - 3.7, x + 3.7, y + 3.7);
+        for (const label of labels) {
+          if (label.items) throw new Error('Dot のリストラベルには対応していません。');
+          const loc = label.loc || 'top';
+          const placement = {
+            top: [0, -2.7, 0, -3.6, 'center', 'ideographic'],
+            bot: [0, 2.7, 0, 3.6, 'center', 'hanging'],
+            left: [-2.7, 0, -3.6, 0, 'right', 'central'],
+            right: [2.7, 0, 3.6, 0, 'left', 'central']
+          }[loc];
+          if (!placement) throw new Error(`未対応の Dot label loc: ${loc}`);
+          const [bx, by, defaultX, defaultY, defaultAlign, baseline] = placement;
+          const ox = label.ofst == null ? defaultX : label.ofst[0] * 36;
+          const oy = label.ofst == null ? defaultY : -label.ofst[1] * 36;
+          const lx = x + bx + ox, ly = y + by + oy;
+          if (!Number.isFinite(lx) || !Number.isFinite(ly)) throw new Error('Dot label の位置が大きすぎます。');
+          const align = label.halign || defaultAlign;
+          const anchor = { left: 'start', center: 'middle', right: 'end' }[align];
+          const visible = label.text.startsWith('$') && label.text.endsWith('$') ? label.text.replace(/[$_{}]/g, '') : label.text;
+          const width = Math.max(12, Array.from(visible).length * 10);
+          bounds(lx - (align === 'right' ? width : align === 'center' ? width / 2 : 0), ly - 18,
+            lx + (align === 'left' ? width : align === 'center' ? width / 2 : 0), ly + 18);
+          elements.push(`<text x="${lx}" y="${ly - 14}" text-anchor="${anchor}" dominant-baseline="${baseline}"${textFill} font-family="sans-serif" font-size="14"><tspan x="${lx}" dy="14">${labelContent(label.text)}</tspan></text>`);
+        }
         if (name) names[name] = { start: [x, y], center: [x, y], end: [x, y], xy: [x, y] };
         log(`Dot: color=${color}`);
         continue;
       }
       if (type === 'Opamp') {
-        if (('leads' in options && !['True', 'False'].includes(options.leads)) || selectedDirection || labels.length || length !== null || 'tox' in options || 'toy' in options || 'dot' in options || 'idot' in options) throw new Error('Opamp は leads=True/False、anchor、at、hold に対応しています。');
+        if (('leads' in options && !['True', 'False'].includes(options.leads)) || selectedDirection || labels.length || length !== null || 'to' in options || 'tox' in options || 'toy' in options || 'dot' in options || 'idot' in options) throw new Error('Opamp は leads=True/False、anchor、at、hold に対応しています。');
         const width = 45 * Math.sqrt(3), lead = options.leads === 'True' ? 22.5 : 0;
         if ('anchor' in options) {
           // Local anchor positions relative to the default Opamp insertion point.
@@ -300,7 +456,7 @@
         continue;
       }
       if (type === 'Ground') {
-        if (('lead' in options && !['True', 'False'].includes(options.lead)) || selectedDirection || length !== null || labels.length || 'tox' in options || 'toy' in options || 'dot' in options || 'idot' in options) throw new Error('Ground は lead=True/False、at、hold に対応しています。');
+        if (('lead' in options && !['True', 'False'].includes(options.lead)) || selectedDirection || length !== null || labels.length || 'to' in options || 'tox' in options || 'toy' in options || 'dot' in options || 'idot' in options) throw new Error('Ground は lead=True/False、at、hold に対応しています。');
         const lead = options.lead === 'False' ? 0 : 14.4;
         elements.push(`<g transform="translate(${x} ${y})"><path d="${lead ? 'M 0,0 L 0,14.4 ' : ''}M -9,${lead} L 9,${lead} M -6.3,${lead + 4.32} L 6.3,${lead + 4.32} M -1.8,${lead + 8.64} L 1.8,${lead + 8.64}" ${stroke}/></g>`);
         bounds(x - 11, y - 2, x + 11, y + lead + 11);
@@ -309,9 +465,24 @@
         if ('hold' in options) [x, y, direction] = previousState;
         continue;
       }
-      if ('tox' in options && 'toy' in options) throw new Error('tox と toy の同時指定には対応していません。');
-      if ((selectedDirection || length !== null) && ('tox' in options || 'toy' in options)) throw new Error('方向と tox/toy の同時指定には対応していません。');
-      if ('tox' in options) {
+      if (['to', 'tox', 'toy'].filter(key => key in options).length > 1) throw new Error('to、tox、toy は同時に指定できません。');
+      if ((selectedDirection || length !== null) && ('to' in options || 'tox' in options || 'toy' in options)) throw new Error('方向・長さと to/tox/toy の同時指定には対応していません。');
+      let targetPoint = null;
+      if ('to' in options || 'endpoints' in options) {
+        if ('endpoints' in options) {
+          const ref = '[A-Za-z_]\\w*\\.[A-Za-z_]\\w*';
+          const match = new RegExp(`^\\s*(${ref})\\s+(${ref})\\s*$`).exec(options.endpoints);
+          if (!match) throw new Error('endpoints は始点と終点の参照を空白で区切って指定してください。');
+          [x, y] = point(match[1]);
+          targetPoint = point(match[2]);
+        } else targetPoint = point(options.to);
+        const vx = targetPoint[0] - x, vy = targetPoint[1] - y;
+        length = Math.hypot(vx, vy);
+        if (!Number.isFinite(length) || length === 0) throw new Error('始点と終点は異なる有限の位置を指定してください。');
+        if (vy === 0) direction = vx < 0 ? 'left' : 'right';
+        else if (vx === 0) direction = vy < 0 ? 'up' : 'down';
+        else direction = Math.atan2(-vy, vx) * 180 / Math.PI;
+      } else if ('tox' in options) {
         const target = point(options.tox)[0];
         direction = target < x ? 'left' : 'right'; length = Math.abs(target - x);
       } else if ('toy' in options) {
@@ -321,51 +492,107 @@
         const degrees = ((Number(options.theta) % 360) + 360) % 360;
         direction = ({ 0: 'right', 90: 'up', 180: 'left', 270: 'down' })[degrees] || Number(options.theta);
       } else if (selectedDirection) direction = selectedDirection;
-      else if (type === 'SourceV' || type === 'SourceSin') direction = 'up';
+      else if (isSource) direction = 'up';
       if (length === null) length = unit;
+      if (type === 'Line' && 'arrow' in options && (!Number.isFinite(length) || length === 0)) throw new Error('長さがゼロまたは不正な Line に矢印を付けられません。');
       if (type === 'Gap' && length < 36) length = 36;
-      if (!['Line', 'Resistor', 'Capacitor', 'Inductor', 'Gap'].includes(type) && length !== unit) throw new Error(`${type} の長さ指定には対応していません。`);
+      if (targetPoint && type === 'Gap' && length !== Math.hypot(targetPoint[0] - x, targetPoint[1] - y)) throw new Error('Gap の端子間距離が短すぎます。');
       if (type === 'Resistor' && length < 36) throw new Error('Resistor の長さが短すぎます。');
       if (type === 'Inductor' && length < 36) throw new Error('Inductor の長さが短すぎます。');
       if (type === 'Capacitor' && length < 6.48) throw new Error('Capacitor の長さが短すぎます。');
+      if (['Diode', 'Zener'].includes(type) && length < 12.6) throw new Error(`${type} の長さが短すぎます。`);
+      if (isSource && length < 36) throw new Error(`${type} の長さが短すぎます。`);
       const arbitraryAngle = typeof direction === 'number';
       const radians = arbitraryAngle ? direction * Math.PI / 180 : 0;
       const [dx, dy, angle] = arbitraryAngle ? [Math.cos(radians), -Math.sin(radians), -direction] : directions[direction];
       const startX = x, startY = y;
-      const endX = x + dx * length, endY = y + dy * length;
+      const endX = targetPoint ? targetPoint[0] : x + dx * length;
+      const endY = targetPoint ? targetPoint[1] : y + dy * length;
       const centerX = (x + endX) / 2, centerY = (y + endY) / 2;
+      const bodyLength = type === 'Capacitor' ? 6.48 : ['Diode', 'Zener'].includes(type) ? 12.6 : type === 'Line' ? 0 : 36;
+      // Gap labels are anchored to the terminal span, not the shifted body.
+      const shiftOffset = type === 'Gap' ? 0 : (length - bodyLength) / 2 * shift;
+      if (!Number.isFinite(shiftOffset)) throw new Error('shift が大きすぎます。');
+      const bodyCenterX = centerX + dx * shiftOffset, bodyCenterY = centerY + dy * shiftOffset;
       let path = paths[type];
-      if (type === 'Line') path = `M 0,0 L ${length},0`;
+      if (type === 'Line') {
+        const arrow = options.arrow || '';
+        path = `M ${arrow.includes('<') ? 9 : 0},0 L ${length - (arrow.includes('>') ? 9 : 0)},0`;
+      }
       if (type === 'Resistor') {
-        const a = length / 2 - 18;
+        const a = length / 2 - 18 + shiftOffset;
         path = `M 0,0 L ${a},0 L ${a + 3},-9 L ${a + 9},9 L ${a + 15},-9 L ${a + 21},9 L ${a + 27},-9 L ${a + 33},9 L ${a + 36},0 L ${length},0`;
       }
-      if (type === 'Capacitor' && length !== unit) {
-        const first = length / 2 - 3.24, second = length / 2 + 3.24;
+      if (type === 'Capacitor' && (length !== defaultUnit || shiftOffset !== 0)) {
+        const first = length / 2 - 3.24 + shiftOffset, second = length / 2 + 3.24 + shiftOffset;
         path = `M 0,0 L ${first},0 M ${first},-9 L ${first},9 M ${second},-9 L ${second},9 M ${second},0 L ${length},0`;
       }
-      if (type === 'Inductor' && length !== unit) {
-        const start = length / 2 - 18;
+      if (type === 'Inductor' && (length !== defaultUnit || shiftOffset !== 0)) {
+        const start = length / 2 - 18 + shiftOffset;
         path = `M 0,0 L ${start},0`;
         for (let i = 0; i < 4; i++) path += ` M ${start + i * 9},0 a 4.5,4.5 0 1 1 9,0`;
         path += ` M ${start + 36},0 L ${length},0`;
       }
-      const circle = type === 'SourceSin' || type === 'SourceV' ? `<circle cx="54" cy="0" r="18" fill="none" stroke="${color}" stroke-width="2"/>` : '';
-      const reflected = 'reverse' in options ? ' transform="translate(108 0) scale(-1 1)"' : '';
-      const shape = type === 'Gap' ? '' : `${circle}<path d="${path}"${reflected} ${stroke}/>`;
+      if (type === 'Diode' && (length !== defaultUnit || shiftOffset !== 0)) {
+        const first = length / 2 - 6.3 + shiftOffset, second = length / 2 + 6.3 + shiftOffset;
+        path = `M 0,0 L ${first},0 M ${first},-9 L ${second},0 L ${first},9 Z M ${second},-9 L ${second},9 M ${second},0 L ${length},0`;
+      }
+      let shape;
+      if (type === 'Zener') {
+        const center = length / 2 + shiftOffset, first = center - 6.3, second = center + 6.3;
+        const sx = 'reverse' in options ? -1 : 1, sy = 'flip' in options ? -1 : 1;
+        const glyph = 'M -6.3,-9 L 6.3,0 L -6.3,9 Z M 6.3,-9 L 6.3,9 M 6.3,-9 L 9.9,-12.6 M 6.3,9 L 2.7,12.6';
+        shape = `<path d="M 0,0 L ${first},0 M ${second},0 L ${length},0" ${stroke}/><path d="${glyph}" transform="translate(${center} 0) scale(${sx} ${sy})" ${stroke}/>`;
+      } else if (isSource && (length !== defaultUnit || shiftOffset !== 0)) {
+        const center = length / 2 + shiftOffset, lead = center - 18;
+        const glyph = path.replace(/^M 0,0 L 36,0 M 72,0 L 108,0\s*/, '');
+        const transform = 'reverse' in options ? `translate(${center + 54} 0) scale(-1 1)` : `translate(${center - 54} 0)`;
+        shape = `<circle cx="${center}" cy="0" r="18" fill="none" stroke="${color}" stroke-width="2"/><path d="M 0,0 L ${lead},0 M ${lead + 36},0 L ${length},0" ${stroke}/>${glyph ? `<path d="${glyph}" transform="${transform}" ${stroke}/>` : ''}`;
+      } else {
+        const circle = isSource ? `<circle cx="54" cy="0" r="18" fill="none" stroke="${color}" stroke-width="2"/>` : '';
+        const reflected = 'reverse' in options ? ' transform="translate(108 0) scale(-1 1)"' : '';
+        shape = type === 'Gap' ? '' : `${circle}<path d="${path}"${reflected} ${stroke}/>`;
+      }
+      if (type === 'Line' && 'arrow' in options) {
+        const arrow = options.arrow;
+        if (arrow.includes('<')) shape += `<path d="M 0,0 L 9,2.7 L 9,-2.7 Z" fill="${color}" stroke="${color}"/>`;
+        if (arrow.includes('>')) shape += `<path d="M ${length},0 L ${length - 9},2.7 L ${length - 9},-2.7 Z" fill="${color}" stroke="${color}"/>`;
+        if (arrow.startsWith('|')) shape += `<path d="M 0,-2.7 L 0,2.7" ${stroke}/>`;
+        if (arrow.endsWith('o')) shape += `<circle cx="${length}" cy="0" r="2.7" fill="${color}" stroke="${color}" stroke-width="2"/>`;
+        // Short lines can put arrow bases beyond the opposite terminal.
+        const points = [];
+        if (arrow.includes('<')) points.push([0, 0], [9, 2.7], [9, -2.7]);
+        if (arrow.includes('>')) points.push([length, 0], [length - 9, 2.7], [length - 9, -2.7]);
+        if (arrow.startsWith('|')) points.push([0, -2.7], [0, 2.7]);
+        if (arrow.endsWith('o')) points.push([length - 3.7, -3.7], [length + 3.7, 3.7], [length - 3.7, 3.7], [length + 3.7, -3.7]);
+        for (const [px, py] of points) {
+          const bx = x + dx * px - dy * py, by = y + dy * px + dx * py;
+          bounds(bx - 2, by - 2, bx + 2, by + 2);
+        }
+      }
       if (shape) elements.push(`<g transform="translate(${x} ${y}) rotate(${angle})">${shape}</g>`);
       bounds(x - 12, y - 12, endX + 12, endY + 12);
       bounds(x + 12, y + 12, endX - 12, endY - 12);
+      if (shiftOffset !== 0 || type === 'Zener') {
+        const halfHeight = type === 'Zener' ? 14 : isSource ? 19 : type === 'Inductor' ? 6 : type === 'Line' || type === 'Gap' ? 2 : 10;
+        const halfWidth = type === 'Zener' ? 11 : bodyLength / 2;
+        for (const localX of [length / 2 + shiftOffset - halfWidth, length / 2 + shiftOffset + halfWidth]) {
+          for (const localY of [-halfHeight, halfHeight]) {
+            const bx = x + dx * localX - dy * localY, by = y + dy * localX + dx * localY;
+            bounds(bx, by, bx, by);
+          }
+        }
+      }
       if (arbitraryAngle) bounds(centerX - 20, centerY - 20, centerX + 20, centerY + 20);
-      if (type === 'SourceSin' || type === 'SourceV') bounds(centerX - 20, centerY - 20, centerX + 20, centerY + 20);
+      if (isSource) bounds(bodyCenterX - 20, bodyCenterY - 20, bodyCenterX + 20, bodyCenterY + 20);
       if ('idot' in options) elements.push(`<circle cx="${x}" cy="${y}" r="3.6" fill="${color}"/>`);
       if ('dot' in options) elements.push(`<circle cx="${endX}" cy="${endY}" r="3.6" fill="${color}"/>`);
       for (const label of labels) {
         if (label.items) {
           label.items.forEach((text, i) => {
             const fraction = (i + 1) / (label.items.length + 1);
-            const lx = x + dx * length * fraction + (arbitraryAngle ? dy * 19 : dy ? -13 : 0);
-            const ly = y + dy * length * fraction + (arbitraryAngle ? -dx * 19 + 5 : dy ? 5 : -19);
+            const lx = x + dx * (length * fraction + shiftOffset) + (arbitraryAngle ? dy * 19 : dy ? -13 : 0);
+            const ly = y + dy * (length * fraction + shiftOffset) + (arbitraryAngle ? -dx * 19 + 5 : dy ? 5 : -19);
             const visible = text.startsWith('$') && text.endsWith('$') ? text.replace(/[$_{}]/g, '') : text;
             const width = Math.max(12, Array.from(visible).length * 10);
             bounds(lx - width, ly - 18, lx + (dy ? 0 : width), ly + 8);
@@ -373,12 +600,20 @@
           });
           continue;
         }
+        if (type === 'Line' && label.loc === 'right' && dx === 1 && dy === 0) {
+          const lx = endX + 3.6, ly = endY;
+          const visible = label.text.startsWith('$') && label.text.endsWith('$') ? label.text.replace(/[$_{}]/g, '') : label.text;
+          const width = Math.max(12, Array.from(visible).length * 10);
+          bounds(lx, ly - 12, lx + width, ly + 12);
+          elements.push(`<text x="${lx}" y="${ly - 14}" text-anchor="start" dominant-baseline="central"${textFill} font-family="sans-serif" font-size="14"><tspan x="${lx}" dy="14">${labelContent(label.text)}</tspan></text>`);
+          continue;
+        }
         const loc = label.loc || (arbitraryAngle ? 'top' : dy ? 'left' : 'top');
-        let lx = centerX, ly = centerY, anchor = 'middle';
+        let lx = bodyCenterX, ly = bodyCenterY, anchor = 'middle';
         if (loc === 'top') {
-          const offset = type === 'SourceSin' || type === 'SourceV' ? 29 : 19;
+          const offset = isSource ? 29 : 19;
           if (arbitraryAngle) {
-            const angledOffset = type === 'SourceSin' || type === 'SourceV' ? 22 : 12.6;
+            const angledOffset = isSource ? 22 : 12.6;
             lx += dy * angledOffset; ly -= dx * angledOffset;
           }
           else ly -= offset;
@@ -387,7 +622,7 @@
           if (arbitraryAngle) { lx -= dy * 19; ly += dx * 19 + 5; }
           else ly += 24;
         }
-        if (loc === 'left') { lx = Math.min(x, endX) - (dy ? (type === 'SourceSin' || type === 'SourceV' ? 22 : 13) : 6); ly += 5; anchor = 'end'; }
+        if (loc === 'left') { lx = Math.min(x, endX) - (dy ? (isSource ? 22 : 13) : 6); ly += 5; anchor = 'end'; }
         if (loc === 'right') { lx = Math.max(x, endX) + (dy ? 13 : 6); ly += 5; anchor = 'start'; }
         const visible = label.text.startsWith('$') && label.text.endsWith('$') ? label.text.replace(/[$_{}]/g, '') : label.text;
         const width = Math.max(12, Array.from(visible).length * 10);

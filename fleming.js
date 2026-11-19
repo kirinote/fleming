@@ -32,175 +32,1685 @@
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;'
   })[c]);
 
-  // Two-terminal geometry comes from schemdraw's documentation examples.
-  // Their default terminals are at (0, 0) and (108, 0) in local coordinates.
-  const paths = {
-    Resistor: 'M 0,0 L 36,0 L 39,-9 L 45,9 L 51,-9 L 57,9 L 63,-9 L 69,9 L 72,0 L 108,0',
-    Capacitor: 'M 0,0 L 50.76,0 M 50.76,-9 L 50.76,9 M 57.24,-9 L 57.24,9 M 57.24,0 L 108,0',
-    Inductor: 'M 0,0 L 36,0 M 36,0 a 4.5,4.5 0 1 1 9,0 M 45,0 a 4.5,4.5 0 1 1 9,0 M 54,0 a 4.5,4.5 0 1 1 9,0 M 63,0 a 4.5,4.5 0 1 1 9,0 M 72,0 L 108,0',
-    Diode: 'M 0,0 L 47.7,0 M 47.7,-9 L 60.3,0 L 47.7,9 Z M 60.3,-9 L 60.3,9 M 60.3,0 L 108,0',
-    Line: 'M 0,0 L 108,0',
-    Source: 'M 0,0 L 36,0 M 72,0 L 108,0',
-    SourceV: 'M 0,0 L 36,0 M 72,0 L 108,0 M 45,-3.6 L 45,3.6 M 59.4,0 L 66.6,0 M 63,-3.6 L 63,3.6',
-    SourceSin: 'M 0,0 L 36,0 M 72,0 L 108,0 M 54,9 L 55.863,8.25 L 57.6,7.5 L 59.091,6.75 L 60.235,6 L 60.955,5.25 L 61.2,4.5 L 60.955,3.75 L 60.235,3 L 59.091,2.25 L 57.6,1.5 L 55.863,0.75 L 54,0 L 52.137,-0.75 L 50.4,-1.5 L 48.909,-2.25 L 47.765,-3 L 47.045,-3.75 L 46.8,-4.5 L 47.045,-5.25 L 47.765,-6 L 48.909,-6.75 L 50.4,-7.5 L 52.137,-8.25 L 54,-9'
+  // Geometry constants taken from Schemdraw's Element2Term subclasses:
+  // reswidth = 1/6 unit, resheight = 1/4 unit, capacitor gap = 0.18 unit.
+  const UNIT = 36;
+  const RSW = UNIT / 6;          // resistor zig-zag step (6 px)
+  const RSH = UNIT * 0.25;       // resistor zig-zag height (9 px)
+  const CAPGAP = UNIT * 0.18;    // capacitor plate gap (6.48 px)
+
+  // Resistor: six zig-zags spanning 6·reswidth, centred on x = 54.
+  const resistorPath = () => {
+    let d = `M 0,0 L ${54 - 3 * RSW},0`;
+    for (let i = 0; i < 6; i++) d += ` L ${54 - 3 * RSW + (i + 0.5) * RSW},${i % 2 ? RSH : -RSH}`;
+    return `${d} L ${54 + 3 * RSW},0 L 108,0`;
+  };
+  // Capacitor: two plates `CAPGAP` apart around x = 54.
+  const capacitorPath = () => {
+    const a = 54 - CAPGAP / 2, b = 54 + CAPGAP / 2;
+    return `M 0,0 L ${a},0 M ${a},-9 L ${a},9 M ${b},-9 L ${b},9 M ${b},0 L 108,0`;
+  };
+  // Inductor: four loops of radius 4.5 px spaced 9 px apart.
+  const inductorPath = () => {
+    let d = 'M 0,0 L 36,0';
+    for (let i = 0; i < 4; i++) d += ` M ${36 + i * 9},0 a 4.5,4.5 0 1 1 9,0`;
+    return `${d} M 72,0 L 108,0`;
+  };
+  // Diode: triangle and bar centred on x = 54, 6.3 px either side.
+  const diodePath = () => {
+    const a = 54 - 6.3, b = 54 + 6.3;
+    return `M 0,0 L ${a},0 M ${a},-9 L ${b},0 L ${a},9 Z M ${b},-9 L ${b},9 M ${b},0 L 108,0`;
+  };
+  // Round source: circle of radius 18 centred on x = 54.
+  const sourcePath = () => 'M 0,0 L 36,0 M 72,0 L 108,0';
+  // Voltage source: source circle plus the +/- marks (0.1 unit tall).
+  const sourceVPath = () => `${sourcePath()} M 45,-3.6 L 45,3.6 M 59.4,0 L 66.6,0 M 63,-3.6 L 63,3.6`;
+  // Sine source: Schemdraw samples 25 points with x following a sine of
+  // amplitude 7.2 px and y descending linearly by 0.75 px per step.
+  const sourceSinPath = () => {
+    const pts = [];
+    for (let i = 0; i <= 24; i++) {
+      const x = Number((54 + 7.2 * Math.sin(Math.PI * i / 12)).toFixed(3));
+      const y = Number((9 - 0.75 * i).toFixed(3));
+      pts.push(`${x},${y}`);
+    }
+    return `${sourcePath()} M ${pts.join(' L ')}`;
+  };
+
+  // Path-form two-terminal parts: one SVG path spanning the 3-unit leads.
+  const pathParts = {
+    Resistor: { form: 'path', path: resistorPath() },
+    // ResistorIEEE is Schemdraw's IEEE/US-style resistor; the same zig-zag.
+    ResistorIEEE: { form: 'path', path: resistorPath() },
+    Capacitor: { form: 'path', path: capacitorPath() },
+    Inductor: { form: 'path', path: inductorPath() },
+    Diode: { form: 'path', path: diodePath() },
+    Line: { form: 'path', path: 'M 0,0 L 108,0' },
+    Source: { form: 'path', path: sourcePath() },
+    SourceV: { form: 'path', path: sourceVPath() },
+    SourceSin: { form: 'path', path: sourceSinPath() }
   };
 
   // Lengths are in the same 36 SVG units per schemdraw unit as the examples.
   const defaultUnit = 108;
   const directions = { right: [1, 0, 0], down: [0, 1, 90], left: [-1, 0, 180], up: [0, -1, -90] };
 
+  const cycloidPoints = loops => {
+    const a = 0.06, b = 0.19, n = loops * 50;
+    const yint = Math.acos(a / b);
+    const t0 = yint, t1 = 2 * (loops + 1) * Math.PI - yint;
+    const raw = Array.from({ length: n }, (_, i) => {
+      const t = t0 + (t1 - t0) * i / (n - 1);
+      return [a * t - b * Math.sin(t), a - b * Math.cos(t)];
+    });
+    const x0 = raw[0][0], xlen = raw[n - 1][0] - x0;
+    const ys = raw.map(point => point[1]);
+    const yscale = (Math.max(...ys) - Math.min(...ys)) / 0.25;
+    return raw.map(([x, y]) => [(x - x0) / xlen, y * yscale]);
+  };
+
+  // Prolate cycloid used by Inductor2 and Relay(cycl=True). The points are
+  // normalized like schemdraw's cycloid(): x spans 1 unit and y uses the
+  // resistor height scale.
+  const relayCycloid = (() => {
+    const loops = 4, n = loops * 50;
+    const points = cycloidPoints(loops);
+    return points.map(([u, v]) => `L ${(v * 36).toFixed(4)},${(18 + u * 36).toFixed(4)}`).join(' ');
+  })();
+
+  // Local coordinates are SVG coordinates (positive y down). Schemdraw flips
+  // y, reverses x about the element center, then shifts, scales and rotates.
+  // The reverse axis must be supplied by the definition; it cannot be guessed
+  // from anchors when the geometry has a different bounding box.
+  function placeComponent(definition, origin, { direction = [1, 0], anchor = null, flip = false, reverse = false, scale = [1, 1] } = {}) {
+    if (anchor !== null && !Object.prototype.hasOwnProperty.call(definition.anchors, anchor)) throw new Error(`Unknown anchor: ${anchor}`);
+    if (reverse && !Number.isFinite(definition.reverseCenter)) throw new Error('Reverse center is not defined.');
+    if (!Array.isArray(scale) || scale.length !== 2 || scale.some(n => !Number.isFinite(n) || n <= 0)) throw new Error('scale must be a finite positive number.');
+    const reflect = ([px, py]) => [reverse ? 2 * definition.reverseCenter - px : px, flip ? -py : py];
+    const offset = anchor === null ? null : reflect(definition.anchors[anchor]);
+    const transform = (localX, localY) => {
+      let [px, py] = reflect([localX, localY]);
+      if (offset) { px -= offset[0]; py -= offset[1]; }
+      if (scale[0] !== 1) px *= scale[0];
+      if (scale[1] !== 1) py *= scale[1];
+      return [origin[0] + px * direction[0] - py * direction[1], origin[1] + px * direction[1] + py * direction[0]];
+    };
+    const anchors = Object.create(null);
+    for (const [name, point] of Object.entries(definition.anchors)) anchors[name] = transform(...point);
+    return { transform, anchors };
+  }
+
+  const linspace = (a, b, n) => Array.from({ length: n }, (_, i) => a + (b - a) * i / (n - 1));
+
+  // Width estimate of Schemdraw's sans-serif approximation (backends/svgtext).
+  function textWidth(text, size) {
+    let units = 0;
+    for (const ch of text) {
+      // Schemdraw's tables use string membership, so digits count as 95.
+      if ('lij|\' '.includes(ch)) units += 37;
+      else if ('![]fI.,:;/\\t'.includes(ch)) units += 50;
+      else if ('`-(){}r"'.includes(ch)) units += 60;
+      else if ('*^zcsJkvxyμ°'.includes(ch)) units += 85;
+      else if (('aebdhnopqug#$L+<>=?_~FZTα' + '0123456789').includes(ch)) units += 95;
+      else if ('BSPEAKVXY&UwNRCHD'.includes(ch)) units += 112;
+      else if ('QGOMm%@Ω'.includes(ch)) units += 140;
+      else if ('W∠'.includes(ch)) units += 155;
+      else units += 75;
+    }
+    return units * 72 / 1000 * (size / 12);
+  }
+
+  // Schemdraw's _align_label default offset for a label at a named anchor.
+  function anchorLabelOffset(halign, valign, pofst) {
+    return {
+      'center-bottom': [0, -pofst], 'right-top': [-pofst, -pofst], 'left-top': [pofst, -pofst],
+      'right-center': [-pofst, 0], 'left-center': [pofst, 0],
+      'center-top': [0, -pofst], 'right-bottom': [-pofst, -pofst], 'left-bottom': [pofst, -pofst]
+    }[`${halign}-${valign}`] || [0, -pofst];
+  }
+
+  // Curves used by Photodiode and LED2, computed like Schemdraw's LED2 code
+  // (50 samples, rotated 20 degrees) in default SVG coordinates.
+  const photoCurves = (() => {
+    const n = 50, th = 20 * Math.PI / 180;
+    const xs = linspace(0.25 * 0.75, 0.25 * 1.25, n);
+    const ys = linspace(-1, 1, n).map(x => -x * (x - 0.7) * (x + 0.7) / 2 + 0.25 * 2.5);
+    const rot = (x, y) => [x * Math.cos(th) - y * Math.sin(th), x * Math.sin(th) + y * Math.cos(th)];
+    const path = shift => xs.map((x, i) => {
+      const [a, b] = rot(x - shift, ys[i]);
+      return `${i ? 'L' : 'M'} ${(a * 36 + 47.7).toFixed(4)},${(-b * 36).toFixed(4)}`;
+    }).join(' ');
+    return [path(0), path(0.2)];
+  })();
+
+  // Filament of Lamp, normalized like Schemdraw's Lamp source.
+  const lampFilament = (() => {
+    const n = 100, a = 0.25, b = 0.7;
+    const t = linspace(1.4, 3.6 * Math.PI, n);
+    const x = t.map(v => a * v - b * Math.sin(v));
+    const y = t.map(v => a - b * Math.cos(v));
+    const x0 = x[0], xn = x[n - 1], y0 = y[0];
+    return t.map((_, i) => `${i ? 'L' : 'M'} ${(36 + (x[i] - x0) / (xn - x0) * 36).toFixed(4)},${(-(y[i] - y0) * 9).toFixed(4)}`).join(' ');
+  })();
+
+  // Sine element of FuseUS in default coordinates.
+  const fuseSine = (() => {
+    const n = 50, xs = linspace(0.24, 1.12, n), ys = linspace(0, 2 * Math.PI, n).map(t => Math.sin(t) * 0.25);
+    return xs.map((x, i) => `${i ? 'L' : 'M'} ${((x + 0.82) * 36).toFixed(4)},${(-ys[i] * 36).toFixed(4)}`).join(' ');
+  })();
+
+  // Two-terminal symbols whose body is a fixed glyph. Coordinates are the
+  // default Schemdraw SVG coordinates (body centered at x=54), repositioned
+  // with translate(c)…translate(-54). `half` is half the intrinsic body length.
+  // ResistorIEC and RBox are the same IEC box resistor in schemdraw 0.23.
+  const iecResistorBody = s => `<path d="M 36,0 L 36,-9 L 72,-9 L 72,9 L 36,9 L 36,0" ${s}/>`;
+
+  // Glyph helpers for switches. The arrow of `action='open'/'close'` is built
+  // from the same elliptical arc Schemdraw uses (SegmentArc width .5, height
+  // .75, theta1 -10°, theta2 70°, plus a filled arrowhead).
+  const switchDot = (cx, cy, color) => `<circle cx="${cx}" cy="${cy}" r="4.32" fill="white" stroke="${color}" stroke-width="2"/>`;
+  // Switch action arrow — a literal port of Schemdraw's SVG backend.
+  // `arc()` draws the path in SVG pixels, then computes the arrowhead back in
+  // *user* coordinates (y up) and only the final `arrow()` call maps to pixels.
+  // Keeping that order is what makes the heads match.
+  const switchArc = (cxU, cyU, widthU, heightU, theta1Deg, theta2Deg, arrow, color) => {
+    const r2 = v => Math.round(v * 100) / 100;
+    const scale = 36;
+    const width = widthU * scale, height = heightU * scale;      // pixels
+    const centerx = cxU * scale, centery = -cyU * scale;         // xform()
+    const angle = 0;
+    const t1 = -theta1Deg, t2 = -theta2Deg;                      // backend negates
+    const a1 = t1 * Math.PI / 180, a2 = t2 * Math.PI / 180;
+    let T1 = Math.atan2(width * Math.sin(a1), height * Math.cos(a1));
+    const T2 = Math.atan2(width * Math.sin(a2), height * Math.cos(a2));
+    while (T1 < T2) T1 += 2 * Math.PI;
+    const sx = centerx + width / 2 * Math.cos(T2), sy = centery + height / 2 * Math.sin(T2);
+    const ex = centerx + width / 2 * Math.cos(T1), ey = centery + height / 2 * Math.sin(T1);
+    const rsx = r2(sx), rsy = r2(sy), rex = r2(ex), rey = r2(ey);
+    let out = `<path d="M ${rsx} ${rsy} a ${r2(width / 2)} ${r2(height / 2)} ${angle} ${Math.abs(T2 - T1) >= Math.PI ? '1 1' : '0 1'} ${r2(rex - rsx)} ${r2(rey - rsy)}" fill="none" stroke="${color}" stroke-width="2"/>`;
+    // Arrowhead, computed in user units exactly like the backend.
+    const wU = widthU, hU = heightU, cU = [cxU, cyU];
+    const arrowlength = 0.25, arrowwidth = 0.15;
+    // The backend negates back: theta1 = -degrees(theta1_radians), and those
+    // radians were already negated, so this returns the caller's values.
+    // Backend: after `theta1 = -theta1; theta2 = -theta2`, it later does
+    // `theta1 = -degrees(theta1)`, which restores the constructor values.
+    const theta1u = theta1Deg, theta2u = theta2Deg;
+    const th2 = Math.atan2((wU / hU) * Math.sin(theta2u * Math.PI / 180), Math.cos(theta2u * Math.PI / 180)) * 180 / Math.PI;
+    const th1 = Math.atan2((wU / hU) * Math.sin(theta1u * Math.PI / 180), Math.cos(theta1u * Math.PI / 180)) * 180 / Math.PI;
+    const head = (xU, yU, theta) => {
+      // backend `arrow()`: convert the anchor to pixels, build the triangle there
+      const x = xU * scale, y = -yU * scale;
+      const dxP = arrowlength / 2 * Math.cos(theta * Math.PI / 180) * scale;
+      const dyP = arrowlength / 2 * Math.sin(theta * Math.PI / 180) * scale;
+      const awP = arrowwidth * scale, alP = arrowlength * scale;
+      const hd = [x, y], tl = [x - dxP, y + dyP];
+      const full = Math.hypot(dxP, dyP);
+      const t = -Math.atan2(dyP, dxP) * 180 / Math.PI;
+      const rot = (px, py) => [px * Math.cos(t * Math.PI / 180) - py * Math.sin(t * Math.PI / 180),
+        px * Math.sin(t * Math.PI / 180) + py * Math.cos(t * Math.PI / 180)];
+      const [f1x, f1y] = rot(full - alP, awP / 2);
+      const [f2x, f2y] = rot(full - alP, -awP / 2);
+      const hx = hd[0] - 1 * 2 * Math.cos(t * Math.PI / 180);
+      const hy = hd[1] - 1 * 2 * Math.sin(t * Math.PI / 180);
+      return `<path d="M ${r2(hx)} ${r2(hy)} L ${r2(f1x + tl[0])} ${r2(f1y + tl[1])} L ${r2(f2x + tl[0])} ${r2(f2y + tl[1])} Z" fill="${color}" stroke="${color}"/>`;
+    };
+    if (arrow === 'ccw') {
+      const dx = Math.cos((th2 + 90) * Math.PI / 180) * arrowlength;
+      const dy = Math.sin((th2 + 90) * Math.PI / 180) * arrowlength;
+      const xU = cU[0] + wU / 2 * Math.cos(th2 * Math.PI / 180);
+      const yU = cU[1] + hU / 2 * Math.sin(th2 * Math.PI / 180);
+      out += head(xU + dx, yU + dy, th2 + 90);
+    } else if (arrow === 'cw') {
+      // Backend `cw` branch: the head sits `arrowlength` beyond the theta1 end
+      // along th1+90 and points back along th1+90+180.
+      const dx = -Math.cos((th1 + 90) * Math.PI / 180) * arrowlength;
+      const dy = -Math.sin((th1 + 90) * Math.PI / 180) * arrowlength;
+      const r3 = th1 * Math.PI / 180;
+      const xU = cU[0] + wU / 2 * Math.cos(r3);
+      const yU = cU[1] + hU / 2 * Math.sin(r3);
+      out += head(xU + dx, yU + dy, th1 + 90 + 180);
+    }
+    return out;
+  };
+
+  // Outlet shapes, ported literally from schemdraw/elements/outlets.py.
+  // Each builder returns { segments, anchors, drop } in drawing units (y up).
+  // `segments` entries are { type: 'poly'|'circle'|'seg', ... } with an
+  // optional `fill` ('black' when plug=True, else 'bg').
+  const outletRotate = (xy, angle, center = [0, 0]) => {
+    const co = Math.cos(angle * Math.PI / 180), so = Math.sin(angle * Math.PI / 180);
+    // schemdraw util.rotate: b = dot(Point(xy) - center, ((co, so), (-so, co)))
+    const bx = xy[0] - center[0], by = xy[1] - center[1];
+    const rx = bx * co - by * so;
+    const ry = bx * so + by * co;
+    return [rx + center[0], ry + center[1]];
+  };
+  const outletLinspace = (a, b, n = 50) => Array.from({ length: n }, (_, i) => a + (b - a) * i / (n - 1));
+
+  const OUTLET_RAD = 1.1;
+
+  function buildOutlet(type, plug) {
+    const fill = plug ? 'black' : 'bg';
+    const R = OUTLET_RAD, segs = [], anchors = {};
+    const poly = (verts, f) => segs.push({ type: 'poly', verts, fill: f });
+    const circle = (c, r, f) => segs.push({ type: 'circle', c, r, fill: f });
+    if (type === 'OutletA' || type === 'OutletB') {
+      const r1 = 1.5;
+      const th = outletLinspace(Math.PI * 3 / 4, Math.PI * 5 / 4);
+      const xl = th.map(t => .15 + r1 * Math.cos(t));
+      const yl = th.map(t => r1 * Math.sin(t));
+      const xr = th.map(t => -.15 + -r1 * Math.cos(t));
+      const yr = th.map(t => -r1 * Math.sin(t));
+      poly(xl.concat(xr).map((x, i) => [x, yl.concat(yr)[i]]));
+      const pinw = r1 / 8, pinh = pinw * 3, pinhn = pinh * 1.25;
+      const pintop = pinh / 2, pintopn = pinhn / 2, pinleft = r1 / 2.2;
+      poly([[-pinleft, pintopn], [-pinleft, pintopn - pinhn], [-pinleft + pinw, pintopn - pinhn], [-pinleft + pinw, pintopn]], fill);
+      poly([[pinleft, pintop], [pinleft, pintop - pinh], [pinleft - pinw, pintop - pinh], [pinleft - pinw, pintop]], fill);
+      anchors.hot = [pinleft - pinw / 2, 0];
+      anchors.neutral = [-pinleft + pinw / 2, 0];
+      if (type === 'OutletB') {
+        const gndw = r1 / 4, gndy = -r1 / 2.5;
+        const x = [-gndw / 2, -gndw / 2, gndw / 2, gndw / 2];
+        const y = [gndy, gndy - gndw / 2, gndy - gndw / 2, gndy];
+        for (const t of outletLinspace(0, Math.PI)) { x.push(gndw / 2 * Math.cos(t)); y.push(gndy + gndw / 2 * Math.sin(t)); }
+        poly(x.map((v, i) => [v, y[i]]), fill);
+        const dy = gndw / 2;
+        for (const which of [1, 2]) segs[which].verts = segs[which].verts.map(([px, py]) => [px, py + dy]);
+        anchors.hot = [anchors.hot[0], anchors.hot[1] + dy];
+        anchors.neutral = [anchors.neutral[0], anchors.neutral[1] + dy];
+        anchors.ground = [0, gndy];
+      }
+      return { segments: segs, anchors, drop: anchors.hot };
+    }
+    if (type === 'OutletC' || type === 'OutletF') {
+      circle([0, 0], R);
+      const prad = R / 8, x = R / 2;
+      circle([-x, 0], prad, fill);
+      circle([x, 0], prad, fill);
+      anchors.hot = [x, 0]; anchors.neutral = [-x, 0];
+      if (type === 'OutletF') {
+        const notchw = R / 8, notchh = R / 6, y = R - .05, y2 = -R + .05;
+        segs.push({ type: 'seg', verts: [[-notchw, y], [-notchw, y - notchh], [notchw, y - notchh], [notchw, y]], fill });
+        segs.push({ type: 'seg', verts: [[-notchw, y2], [-notchw, y2 + notchh], [notchw, y2 + notchh], [notchw, y2]], fill });
+        anchors.groundN = [0, R];
+        anchors.groundS = [0, -R];
+        return { segments: segs, anchors, drop: anchors.hot };
+      }
+      return { segments: segs, anchors, drop: anchors.hot };
+    }
+    if (type === 'OutletD' || type === 'OutletE' || type === 'OutletK') {
+      circle([0, 0], R);
+      const prad = R / 8, x = R / 2;
+      if (type === 'OutletK') {
+        circle([-x, 0], prad, fill);
+        circle([x, 0], prad, fill);
+        anchors.hot = [x, 0]; anchors.neutral = [-x, 0];
+        const gndw = R / 4, gndy = -R / 2;
+        const gx = [-gndw / 2, -gndw / 2, gndw / 2, gndw / 2];
+        const gy = [gndy, gndy + gndw / 2, gndy + gndw / 2, gndy];
+        for (const t of outletLinspace(0, Math.PI)) { gx.push(gndw / 2 * Math.cos(t)); gy.push(gndy - gndw / 2 * Math.sin(t)); }
+        poly(gx.map((v, i) => [v, gy[i]]), fill);
+        anchors.ground = [0, gndy];
+        return { segments: segs, anchors, drop: [x, 0] };
+      }
+      const y = type === 'OutletD' ? -R / 4 : 0;
+      const y2 = type === 'OutletD' ? R / 2.5 : R / 2;
+      circle([-x, y], prad, fill);
+      circle([x, y], prad, fill);
+      circle([0, y2], type === 'OutletD' ? prad * 1.2 : prad, fill);
+      anchors.hot = [x, y]; anchors.neutral = [-x, y]; anchors.ground = [0, y2];
+      return { segments: segs, anchors, drop: type === 'OutletD' ? anchors.ground : anchors.neutral };
+    }
+    if (type === 'OutletG') {
+      circle([0, 0], R);
+      const pinw = R / 6, pinh = pinw * 3, gndw = R / 5, gndtop = R * 3 / 4, y = -R / 2.5, pinleft = pinw;
+      poly([[-gndw / 2, gndtop], [-gndw / 2, gndtop - pinh], [gndw / 2, gndtop - pinh], [gndw / 2, gndtop]], fill);
+      poly([[-pinleft, y], [-pinleft, y - pinw], [-pinleft - pinh, y - pinw], [-pinleft - pinh, y]], fill);
+      poly([[pinleft, y], [pinleft, y - pinw], [pinleft + pinh, y - pinw], [pinleft + pinh, y]], fill);
+      anchors.hot = [pinleft + pinh / 2, y - pinw / 2];
+      anchors.neutral = [-pinleft - pinh / 2, y - pinw / 2];
+      anchors.ground = [0, gndtop - pinh / 2];
+      return { segments: segs, anchors, drop: anchors.hot };
+    }
+    if (type === 'OutletH' || type === 'OutletI') {
+      circle([0, 0], R);
+      const pinw = R / 8, pinh = pinw * 3, gndtop = -pinw * 2;
+      const verts = [[-pinw / 2, gndtop], [-pinw / 2, gndtop - pinh], [pinw / 2, gndtop - pinh], [pinw / 2, gndtop]];
+      const hot = verts.map(v => outletRotate(v, 120));
+      const neut = verts.map(v => outletRotate(v, -120));
+      poly(verts, fill); poly(hot, fill); poly(neut, fill);
+      anchors.hot = hot[1]; anchors.neutral = neut[2]; anchors.ground = [0, gndtop - pinh];
+      if (type === 'OutletI') {
+        const hotc = [.4, .3], neutc = [-.4, .3];
+        segs[2].verts = segs[2].verts.map(v => outletRotate(v, 90, hotc));
+        segs[3].verts = segs[3].verts.map(v => outletRotate(v, -90, neutc));
+        anchors.hot = outletRotate(anchors.hot, 90, hotc);
+        anchors.neutral = outletRotate(anchors.neutral, -90, neutc);
+        return { segments: segs, anchors, drop: anchors.hot };
+      }
+      return { segments: segs, anchors, drop: anchors.hot };
+    }
+    if (type === 'OutletJ' || type === 'OutletL') {
+      const prad = R / 8;
+      if (type === 'OutletJ') {
+        const fullh = R * 1.5, fullw = fullh * 2, dw = fullw / 5;
+        poly([[-fullw / 2, 0], [-fullw / 2 + dw, fullh / 2], [fullw / 2 - dw, fullh / 2],
+          [fullw / 2, 0], [fullw / 2 - dw, -fullh / 2], [-fullw / 2 + dw, -fullh / 2]], fill);
+        circle([-fullw / 4, 0], prad, fill);
+        circle([0, -prad * 2], prad, fill);
+        circle([fullw / 4, 0], prad, fill);
+        anchors.hot = [fullw / 4, 0]; anchors.neutral = [-fullw / 4, 0]; anchors.ground = [0, -prad * 2];
+      } else {
+        const fullh = R * 1.2, fullw = fullh * 2.25;
+        poly([[-fullw / 2, fullh / 2], [fullw / 2, fullh / 2], [fullw / 2, -fullh / 2], [-fullw / 2, -fullh / 2]], fill);
+        circle([-fullw / 4, 0], prad, fill);
+        circle([0, 0], prad, fill);
+        circle([fullw / 4, 0], prad, fill);
+        anchors.hot = [fullw / 4, 0]; anchors.neutral = [-fullw / 4, 0]; anchors.ground = [0, 0];
+      }
+      return { segments: segs, anchors, drop: anchors.hot };
+    }
+    throw new Error(`Unsupported outlet: ${type}`);
+  }
+
+  // Schemdraw's `Segment(..., arrow='->')` rendering, read off its SVG output:
+  // the line stops `arrowlength` (9 px) short of the end, and the head is a
+  // triangle whose base sits at that point, 0.15 unit (5.4 px) wide, with its
+  // tip pulled back 2 px (`lw*2`) from the segment end. Points are SVG pixels.
+  const segmentArrow = (x0, y0, x1, y1, color, stroke) => {
+    const arrowlength = 0.25 * 36, halfwidth = 0.15 * 36 / 2;
+    const len = Math.hypot(x1 - x0, y1 - y0) || 1;
+    const ux = (x1 - x0) / len, uy = (y1 - y0) / len;
+    const lx = x1 - arrowlength * ux, ly = y1 - arrowlength * uy;
+    const tipx = x1 - 2 * ux, tipy = y1 - 2 * uy;
+    const px = -uy * halfwidth, py = ux * halfwidth;
+    return `<path d="M ${x0.toFixed(4)},${y0.toFixed(4)} L ${lx.toFixed(4)},${ly.toFixed(4)}" ${stroke}/>` +
+      `<path d="M ${tipx.toFixed(4)},${tipy.toFixed(4)} L ${(lx + px).toFixed(4)},${(ly + py).toFixed(4)} L ${(lx - px).toFixed(4)},${(ly - py).toFixed(4)} Z" fill="${color}" stroke="${color}"/>`;
+  };
+
+  // Shared glyph builder for SwitchDpst / SwitchDpdt (drawn in screen pixels).
+  function dpSwitchGlyph(dpdt) {
+    const dotR = 0.12, P = 36;
+    const yofst = dpdt ? -1.4 : -1;
+    return {
+      half: 18,
+      extent: dpdt ? [36, 80, -20, 76] : [36, 80, -20, 62],
+      body: (s, c, options = {}) => {
+        const contacts = options.contacts !== false, link = options.link !== false;
+        const px = x => (x * P).toFixed(3);
+        const py = y => (-y * P).toFixed(3);
+        // p1_path: (0,0) gap (2r, .1) → (.8/.7, .45/.25) gap (1, .4)
+        const x1 = 2 * dotR, y1 = 0.1, x2 = dpdt ? 0.7 : 0.8, y2 = dpdt ? 0.25 : 0.45;
+        const seg1 = contacts
+          ? `M ${px(x1)},${py(y1)} L ${px(x2)},${py(y2)}`
+          : `M 0,0 L ${px(x2)},${py(y2)}`;
+        // p2_path: (2r, yofst+.1) → (.8/.7, yofst+.45/.25)
+        const seg2 = contacts
+          ? `M ${px(x1)},${py(yofst + y1)} L ${px(x2)},${py(yofst + y2)}`
+          : `M 0,${py(yofst)} L ${px(x2)},${py(yofst + y2)}`;
+        let dots = '';
+        if (contacts) {
+          const half = 1 - dotR;
+          const pts = dpdt
+            ? [[dotR, 0], [half, -0.4], [half, 0.4], [dotR, yofst], [half, yofst - 0.4], [half, yofst + 0.4]]
+            : [[dotR, 0], [half, 0], [dotR, yofst], [half, yofst]];
+          dots = pts.map(([x, y]) => switchDot(x * P, -y * P, c)).join('');
+        }
+        // link: (0.5, yofst+.25) → (0.5, 0.2), dotted
+        const bar = link
+          ? `<path d="M ${px(0.5)},${py(yofst + 0.25)} L ${px(0.5)},${py(0.2)}" fill="none" stroke="${c}" stroke-width="2" stroke-dasharray="2 3.3"/>`
+          : '';
+        return `<path d="${seg1} ${seg2}" ${s}/>${bar}${dots}`;
+      }
+    };
+  }
+
+  // Glyph-form two-terminal parts: a body of `half` × 2 px centred at x = 54
+  // with separate leads. Both forms live in one registry, mirroring how
+  // Schemdraw keeps every two-terminal part as an Element2Term subclass.
+  const twoTerminalParts = {
+    ...pathParts,
+    Schottky: {
+      half: 6.3,
+      extent: [45, 66, -12, 12],
+      body: s => `<path d="M 47.7,-9 L 60.3,0 L 47.7,9 Z M 60.3,-9 L 60.3,9 M 60.3,-9 L 56.7,-9 L 56.7,-5.4 M 60.3,9 L 63.9,9 L 63.9,5.4" ${s}/>`
+    },
+    Varactor: {
+      half: 8.64,
+      extent: [43, 65, -12, 12],
+      body: s => `<path d="M 45.36,-9 L 57.96,0 L 45.36,9 Z M 57.96,-9 L 57.96,9 M 62.64,-9 L 62.64,9" ${s}/>`
+    },
+    RBox: {
+      half: 18,
+      extent: [34, 74, -11, 11],
+      body: iecResistorBody
+    },
+    ResistorIEC: {
+      half: 18,
+      extent: [34, 74, -11, 11],
+      body: iecResistorBody
+    },
+    Thermistor: {
+      half: 18,
+      extent: [34, 74, -20, 20],
+      body: s => `<path d="M 36,0 L 36,-9 L 72,-9 L 72,9 L 36,9 L 36,0 M 36,16.2 L 43.2,16.2 L 72,-16.2" ${s}/>`
+    },
+    Crystal: {
+      half: 7.2,
+      extent: [44, 64, -11, 11],
+      body: s => `<path d="M 46.8,-9 L 46.8,9 M 50.4,-9 L 50.4,9 L 57.6,9 L 57.6,-9 L 50.4,-9 M 61.2,-9 L 61.2,9" ${s}/>`
+    },
+    CapacitorVar: {
+      half: 3.24,
+      extent: [36, 70, -14, 12],
+      body: (s, c) => `<path d="M 50.76,-9 L 50.76,9 M 57.24,-9 L 57.24,9 M 38.76,9 L 62.862,-7.871" ${s}/><path d="M 67.122,-10.853 L 64.513,-5.512 L 61.21,-10.23 Z" fill="${c}"/>`
+    },
+    CapacitorTrim: {
+      half: 3.24,
+      extent: [38, 73, -15, 11],
+      body: s => `<path d="M 50.76,-9 L 50.76,9 M 57.24,-9 L 57.24,9 M 39.96,9 L 68.04,-9 M 65.32,-13.243 L 70.76,-4.757" ${s}/>`
+    },
+    // `options` holds part-specific flags (contacts, nc, action) when present.
+    Switch: {
+      half: 18,
+      extent: [34, 74, -20, 8],
+      body: (s, c, options = {}) => {
+        const contacts = options.contacts !== false, nc = options.nc === true, link = options.link !== false;
+        const lever = nc ? 'M 44.64,0 L 65.7,-5.4' : 'M 44.64,-3.6 L 64.8,-16.2';
+        const dots = contacts
+          ? switchDot(40.32, 0, c) + switchDot(67.68, 0, c)
+          : (nc ? `<path d="M 67.68,0 L 67.68,-5.4" ${s}/>` : '');
+        const arrow = options.action === 'open' || options.action === 'close'
+          ? switchArc(1.4, options.action === 'open' ? 0.1 : 0.25, 0.5, 0.75, -10, 70, options.action === 'open' ? 'ccw' : 'cw', c) : '';
+        return `<path d="${lever}" ${s}/>${dots}${arrow}`;
+      }
+    },
+    SwitchSpdt: {
+      half: 18,
+      extent: [34, 74, -32, 8],
+      body: (s, c, options = {}) => {
+        // Schemdraw keeps the first lead and the two lower contacts; only the
+        // third (upper) contact is optional, and `contacts=False` joins the
+        // pivot lead straight to the lever.
+        const contacts = options.contacts !== false;
+        const lever = contacts ? 'M 44.64,-3.6 L 64.8,-16.2' : 'M 36,0 L 66.6,-16.2';
+        const dots = switchDot(40.32, 0, c) + switchDot(67.68, 0, c) +
+          (contacts ? switchDot(67.68, -25.2, c) : '');
+        const arrow = options.action === 'open' || options.action === 'close'
+          ? switchArc(1.4, options.action === 'open' ? 0.1 : 0.25, 0.5, 0.75, -10, 70, options.action === 'open' ? 'ccw' : 'cw', c) : '';
+        return `<path d="${lever}" ${s}/>${dots}${arrow}`;
+      }
+    },
+    // Double-pole switches hang the second pole 36 px below the terminal line;
+    // coordinates are Schemdraw's default SVG frame with the waist at y = 18.
+    // Single-pole double-throw switch with one throw above and one below
+    // (Schemdraw `SwitchSpdt2`): the lever points at the upper throw. This
+    // entry supplies the lead-less 1-unit glyph; the standalone SwitchSpdt2
+    // branch places it and publishes its a/b/c anchors.
+    SwitchSpdt2: {
+      half: 18,
+      extent: [34, 74, -22, 22],
+      body: (s, c, options = {}) => {
+        const contacts = options.contacts !== false;
+        const lever = contacts ? 'M 8.64,-3.6 L 25.2,-9' : 'M 0,0 L 30.6,-9';
+        const dots = contacts
+          ? switchDot(4.32, 0, c) + switchDot(31.68, 14.4, c) + switchDot(31.68, -14.4, c) : '';
+        const action = options.action;
+        // `SegmentArc((.35, 0))` / `((.30, 0))` in the element's local frame.
+        const arrow = action === 'open' || action === 'close'
+          ? switchArc(action === 'open' ? 0.35 : 0.3, 0, 0.5, 0.75, -10, 70, action === 'open' ? 'ccw' : 'cw', c) : '';
+        return `<path d="${lever}" ${s}/>${dots}${arrow}`;
+      }
+    },
+    // Double-pole switches ported from schemdraw/elements/switches.py. The
+    // glyph is written in drawing units (y up) and converted here, so the
+    // numbers come from the Segment lists instead of being read off an image.
+    // `yofst` is -1 for DPST and -1.4 for DPDT; the second pole is drawn below
+    // the terminal line.
+    SwitchDpst: dpSwitchGlyph(false),
+    SwitchDpdt: dpSwitchGlyph(true),
+    // Reed switch. Schemdraw traces the envelope as 50 points down the left
+    // half circle (x = 39.6, r = 0.3), 50 points up the right one (x = 75.6),
+    // and closes back on the start point.
+    SwitchReed: {
+      half: 18,
+      extent: [34, 74, -14, 14],
+      body: s => {
+        const r = 0.3 * 36, n = 49;
+        const pts = [];
+        for (let i = 0; i <= n; i++) {
+          const th = Math.PI * i / n;
+          pts.push([39.6 - r * Math.sin(th), r * Math.cos(th)]);
+        }
+        for (let i = 0; i <= n; i++) {
+          const th = Math.PI * i / n;
+          pts.push([75.6 + r * Math.sin(th), -r * Math.cos(th)]);
+        }
+        pts.push([39.6, r]);
+        // The outline is already in SVG coordinates (y down).
+        const outline = pts.map(([px, py], i) => `${i ? 'L' : 'M'} ${px.toFixed(3)},${py.toFixed(3)}`).join(' ');
+        return `<path d="${outline}" ${s}/>` +
+          `<path d="M 39.6,0 L 70.2,-5.4 M 68.4,0 L 108,0" ${s}/>`;
+      }
+    },
+    // Push button. `nc` moves the bar above the contact line (Schemdraw puts it
+    // at -sw_dot_r-0.05 with the stem 0.15 higher) and `contacts=False` removes
+    // the contact circles, extending the leads to their positions.
+    Button: {
+      half: 18,
+      extent: [34, 74, -21, 8],
+      body: (s, c, options = {}) => {
+        const contacts = options.contacts !== false, nc = options.nc === true;
+        const lead = contacts
+          ? `M 0,0 L 36,0 M 72,0 L 108,0`
+          : `M 0,0 L 40.32,0 M 67.68,0 L 108,0`;
+        const barY = nc ? 6.12 : -10.8, stemTop = nc ? -9.72 : -18;
+        const dots = contacts
+          ? `<circle cx="40.32" cy="0" r="4.32" fill="none" stroke="${c}" stroke-width="2"/><circle cx="67.68" cy="0" r="4.32" fill="none" stroke="${c}" stroke-width="2"/>` : '';
+        return `<path d="${lead}" ${s}/><path d="M 40.32,${barY} L 67.68,${barY} M 54,${barY} L 54,${stemTop}" ${s}/>${dots}`;
+      }
+    },
+    Lamp2: {
+      half: 18,
+      extent: [34, 74, -20, 20],
+      body: (s, c) => `<circle cx="54" cy="0" r="18" fill="none" stroke="${c}" stroke-width="2"/><path d="M 41.272,-12.728 L 66.728,12.728 M 41.272,12.728 L 66.728,-12.728" ${s}/>`
+    },
+    SourcePulse: {
+      half: 18,
+      extent: [34, 74, -20, 20],
+      body: (s, c) => `<circle cx="54" cy="0" r="18" fill="none" stroke="${c}" stroke-width="2"/><path d="M 50.4,-10.8 L 50.4,-5.4 L 55.8,-5.4 L 55.8,5.4 L 50.4,5.4 L 50.4,10.8" ${s}/>`
+    },
+    SourceSquare: {
+      half: 18,
+      extent: [34, 74, -20, 20],
+      body: (s, c) => `<circle cx="54" cy="0" r="18" fill="none" stroke="${c}" stroke-width="2"/><path d="M 54,-9 L 61.2,-9 L 61.2,0 L 46.8,0 L 46.8,9 L 54,9" ${s}/>`
+    },
+    SourceTriangle: {
+      half: 18,
+      extent: [34, 74, -20, 20],
+      body: (s, c) => `<circle cx="54" cy="0" r="18" fill="none" stroke="${c}" stroke-width="2"/><path d="M 50.4,-9 L 61.2,0 L 50.4,9" ${s}/>`
+    },
+    SourceRamp: {
+      half: 18,
+      extent: [34, 74, -20, 20],
+      body: (s, c) => `<circle cx="54" cy="0" r="18" fill="none" stroke="${c}" stroke-width="2"/><path d="M 50.4,-9 L 64.8,7.2 L 50.4,7.2" ${s}/>`
+    },
+    Photodiode: {
+      half: 6.3,
+      extent: [33, 68, -35, 12],
+      body: (s, c) => `<path d="M 47.7,-9 L 60.3,0 L 47.7,9 Z M 60.3,-9 L 60.3,9" ${s}/><path d="${photoCurves[0]}" ${s}/><path d="${photoCurves[1]}" ${s}/><path d="M 53.029,-17.983 L 52.369,-19.704 M 46.263,-15.52 L 45.603,-17.242" ${s}/><path d="M 54.231,-14.849 L 49.68,-18.673 L 55.058,-20.735 Z M 47.465,-12.386 L 42.914,-16.21 L 48.292,-18.273 Z" fill="${c}"/>`
+    },
+    LED2: {
+      half: 6.3,
+      extent: [33, 68, -35, 12],
+      body: (s, c) => `<path d="M 47.7,-9 L 60.3,0 L 47.7,9 Z M 60.3,-9 L 60.3,9" ${s}/><path d="${photoCurves[0]}" ${s}/><path d="${photoCurves[1]}" ${s}/><path d="M 43.894,-30.46 L 44.555,-28.738 M 37.129,-27.997 L 37.789,-26.276" ${s}/><path d="M 42.693,-33.594 L 47.244,-29.77 L 41.866,-27.707 Z M 35.927,-31.131 L 40.478,-27.307 L 35.1,-25.245 Z" fill="${c}"/>`
+    },
+    Lamp: {
+      half: 18,
+      extent: [34, 74, -20, 20],
+      body: (s, c) => `<circle cx="54" cy="0" r="18" fill="none" stroke="${c}" stroke-width="2"/><path d="${lampFilament}" ${s}/>`
+    },
+    FuseUS: {
+      half: 15.84,
+      extent: [32, 76, -12, 12],
+      body: (s, c) => `<path d="${fuseSine}" ${s}/><circle cx="33.84" cy="0" r="4.32" fill="white" stroke="${c}" stroke-width="2"/><circle cx="74.16" cy="0" r="4.32" fill="white" stroke="${c}" stroke-width="2"/>`
+    },
+    Memristor: {
+      half: 18,
+      extent: [34, 74, -11, 11],
+      body: (s, c) => `<path d="M 36,-9 L 72,-9 L 72,9 L 36,9 L 36,-9 M 36,0 L 43.2,0 L 43.2,5.4 L 50.4,5.4 L 50.4,-5.4 L 57.6,-5.4 L 57.6,5.4 L 64.8,5.4 L 64.8,0 L 72,0" ${s}/><path d="M 36,-9 L 36,9 L 39.6,9 L 39.6,-9 Z" fill="${c}"/>`
+    },
+    SparkGap: {
+      half: 18,
+      extent: [34, 74, -6, 6],
+      body: (s, c) => `<path d="M 36,0 L 43.56,0 M 72,0 L 64.44,0" ${s}/><path d="M 50.56,0 L 43.56,4.5 L 43.56,-4.5 Z M 57.44,0 L 64.44,-4.5 L 64.44,4.5 Z" fill="${c}"/>`
+    },
+    MeterV: { half: 18, extent: [34, 74, -20, 20], body: (s, c) => `<circle cx="54" cy="0" r="18" fill="none" stroke="${c}" stroke-width="2"/>`, texts: [{ x: 54, y: 0, value: 'V' }] },
+    MeterA: { half: 18, extent: [34, 74, -20, 20], body: (s, c) => `<circle cx="54" cy="0" r="18" fill="none" stroke="${c}" stroke-width="2"/>`, texts: [{ x: 54, y: 0, value: 'A' }] },
+    MeterI: { half: 18, extent: [34, 74, -20, 20], body: (s, c) => `<circle cx="54" cy="0" r="18" fill="none" stroke="${c}" stroke-width="2"/>`, texts: [{ x: 54, y: 0, value: 'I' }] },
+    MeterOhm: { half: 18, extent: [34, 74, -20, 20], body: (s, c) => `<circle cx="54" cy="0" r="18" fill="none" stroke="${c}" stroke-width="2"/>`, texts: [{ x: 54, y: 0, value: 'Ω' }] },
+    MeterArrow: {
+      half: 18,
+      extent: [34, 74, -20, 20],
+      body: (s, c) => `<circle cx="54" cy="0" r="18" fill="none" stroke="${c}" stroke-width="2"/><path d="M 45,-5.76 L 55.42,0.909" ${s}/><path d="M 61.315,4.682 L 53.964,3.183 L 56.875,-1.366 Z" fill="${c}"/>`
+    },
+    SourceControlled: {
+      half: 18,
+      extent: [34, 74, -20, 20],
+      body: s => `<path d="M 36,0 L 54,-18 L 72,0 L 54,18 Z" ${s}/>`
+    },
+    SourceControlledV: {
+      half: 18,
+      extent: [34, 74, -20, 20],
+      body: s => `<path d="M 36,0 L 54,-18 L 72,0 L 54,18 Z M 45,-3.6 L 45,3.6 M 59.4,0 L 66.6,0 M 63,-3.6 L 63,3.6" ${s}/>`
+    },
+    SourceControlledI: {
+      half: 18,
+      extent: [34, 74, -20, 20],
+      body: (s, c) => `<path d="M 36,0 L 54,-18 L 72,0 L 54,18 Z M 45,0 L 54,0" ${s}/><path d="M 61,0 L 54,2.7 L 54,-2.7 Z" fill="${c}"/>`
+    },
+    Solar: {
+      half: 18,
+      extent: [30, 86, -35, 15],
+      body: (s, c) => `<circle cx="54" cy="0" r="18" fill="none" stroke="${c}" stroke-width="2"/><path d="M 36,0 L 50.4,0 M 57.6,0 L 72,0 M 50.4,-4.5 L 50.4,4.5 M 57.6,-9.9 L 57.6,9.9" ${s}/><path d="M 75.6,-32.4 L 71.164,-27.964 M 82.8,-25.2 L 78.364,-20.764" ${s}/><path d="M 66.214,-23.014 L 69.255,-29.873 L 73.073,-26.055 Z M 73.414,-15.814 L 76.455,-22.673 L 80.273,-18.855 Z" fill="${c}"/>`
+    },
+    Neon: {
+      half: 18,
+      extent: [34, 74, -20, 20],
+      body: (s, c) => `<circle cx="54" cy="0" r="18" fill="none" stroke="${c}" stroke-width="2"/><circle cx="45" cy="-7.2" r="1.8" fill="none" stroke="${c}" stroke-width="2"/><path d="M 36,0 L 50.4,0 M 57.6,0 L 72,0 M 50.4,-9 L 50.4,9 M 57.6,-9 L 57.6,9" ${s}/>`
+    }
+  };
+  // Every remaining entry is a glyph drawn centred at x = 54.
+  for (const key of Object.keys(twoTerminalParts)) if (!twoTerminalParts[key].form) twoTerminalParts[key].form = 'glyph';
+
+  // Half of an element's thickness. LoopCurrent insets its loop from the four
+  // surrounding elements, like Schemdraw's bbox-based calculation.
+  function loopHalfExtent(type) {
+    if (['Line', 'Wire', 'Gap', 'BusLine', 'DataBusLine'].includes(type)) return 0;
+    if (['Source', 'SourceV', 'SourceSin', 'SourceI', 'SourcePulse', 'SourceSquare', 'SourceTriangle',
+      'SourceRamp', 'Lamp', 'Lamp2', 'Solar', 'Neon', 'MeterV', 'MeterA', 'MeterI', 'MeterOhm',
+      'MeterArrow', 'SourceControlled', 'SourceControlledV', 'SourceControlledI', 'Motor'].includes(type)) return 18;
+    const def = twoTerminalParts[type];
+    if (def && def.extent) return Math.max(Math.abs(def.extent[2]), Math.abs(def.extent[3]));
+    return 9;
+  }
+
+  // How far an element extends above / below its centreline. CurrentLabel
+  // measures its offset from that edge, like Schemdraw's bbox-based placement.
+  function sideExtent(type) {
+    if (['Line', 'Wire', 'Gap', 'BusLine', 'DataBusLine'].includes(type)) return [0, 0];
+    if (type === 'Inductor') return [4.5, 0];
+    if (['Source', 'SourceV', 'SourceSin', 'SourceI', 'SourcePulse', 'SourceSquare', 'SourceTriangle',
+      'SourceRamp', 'Lamp', 'Lamp2', 'Solar', 'Neon', 'MeterV', 'MeterA', 'MeterI', 'MeterOhm',
+      'MeterArrow', 'SourceControlled', 'SourceControlledV', 'SourceControlledI', 'Motor'].includes(type)) return [18, 18];
+    const def = twoTerminalParts[type];
+    if (def && def.extent) return [Math.abs(def.extent[2]), Math.abs(def.extent[3])];
+    return [9, 9];
+  }
+
+  // Local anchors of a two-terminal element, in the element's unrotated SVG
+  // frame (x along the element, y down). `reverse` mirrors x about the body
+  // centre and `sy` is -1 for `flip`, matching the drawing code below.
+  // The points here are also used to publish a named element's anchors.
+  function twoTerminalLocalAnchors(type, length, shiftOffset, sy, options, extra = {}) {
+    const bodyCenter = length / 2 + shiftOffset;
+    const reverse = 'reverse' in options;
+    const mx = lx => reverse ? 2 * bodyCenter - lx : lx;
+    const points = Object.create(null);
+    points.start = [0, 0];
+    points.end = [length, 0];
+    points.center = [length / 2, 0];
+    const tapH = extra.tapH === undefined ? 0.72 * 36 : extra.tapH;
+    const batterySpan = extra.batterySpan || 0;
+    const coaxRadius = extra.coaxRadius === undefined ? 10.8 : extra.coaxRadius;
+    const coaxLead = extra.coaxLead === undefined ? 21.6 : extra.coaxLead;
+    if (['Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE'].includes(type)) {
+      points.tap = [mx(bodyCenter), -tapH * sy];
+    }
+    if (type === 'Rshunt') {
+      points.v1 = [mx(bodyCenter - 31.5), 18 * sy];
+      points.v2 = [mx(bodyCenter + 31.5), 18 * sy];
+    }
+    if (type === 'SCR') points.gate = [mx(bodyCenter + 17.1), 18 * sy];
+    if (type === 'Triac') points.gate = [mx(bodyCenter + 24.3), -18 * sy];
+    if (type === 'BatteryDouble') points.tap = [bodyCenter - batterySpan / 2 + 27, -13.5 * sy];
+    if (type === 'BjtNpn2' || type === 'BjtPnp2' || type === 'BjtPnp2c2') {
+      points.base = [bodyCenter, -28.62 * sy];
+      const emitterAtEnd = (type !== 'BjtNpn2') !== reverse;
+      points.emitter = emitterAtEnd ? [length, 0] : [0, 0];
+      points.collector = emitterAtEnd ? [0, 0] : [length, 0];
+      if (type === 'BjtPnp2c2') points.C2 = [bodyCenter + (reverse ? 10.8 : -10.8), 0];
+    }
+    if (type === 'NMos2' || type === 'PMos2') {
+      const gateOffset = (type === 'NMos2' ? 12 : -12) * (reverse ? -1 : 1);
+      points.gate = [bodyCenter + gateOffset, 30 * sy];
+      const sourceAtBodyEnd = (type === 'NMos2') !== reverse;
+      points.source = [sourceAtBodyEnd ? bodyCenter + 30 : bodyCenter - 30, 0];
+      points.drain = [sourceAtBodyEnd ? bodyCenter - 30 : bodyCenter + 30, 0];
+      points.S = points.source;
+      points.D = points.drain;
+    }
+    if (type === 'NFet2' || type === 'PFet2') {
+      const sourceAtEnd = !reverse;
+      points.gate = [bodyCenter, -49.2 * sy];
+      points.source = sourceAtEnd ? [length, 0] : [0, 0];
+      points.drain = sourceAtEnd ? [0, 0] : [length, 0];
+      points.S = points.source;
+      points.D = points.drain;
+      if (extra.bulk) points.bulk = [bodyCenter, 0];
+    }
+    if (type === 'JFetN2' || type === 'JFetP2') {
+      const gateOffset = 9 * (reverse ? -1 : 1);
+      points.gate = [bodyCenter + gateOffset, -33 * sy];
+      const sourceAtEnd = !reverse;
+      points.source = sourceAtEnd ? [length, 0] : [0, 0];
+      points.drain = sourceAtEnd ? [0, 0] : [length, 0];
+      points.S = points.source;
+      points.D = points.drain;
+    }
+    if (type === 'CurrentMirror' || type === 'VoltageMirror') {
+      const offset = type === 'CurrentMirror'
+        ? Math.sqrt(0.3 * 0.3 - 0.2 * 0.2) * 36
+        : Math.sqrt(1 - 0.2 * 0.2 / (0.3 * 0.3)) * 0.15 * 36;
+      points.common = [bodyCenter, -offset * sy];
+    }
+    if (type === 'SwitchSpdt') {
+      const contacts = !('contacts' in options) || options.contacts === 'True';
+      const a = contacts ? bodyCenter - 13.68 : bodyCenter - 18;
+      const b = contacts ? bodyCenter + 13.68 : bodyCenter + 18;
+      points.a = [mx(a), 0];
+      points.b = [mx(b), 0];
+      points.c = [mx(b), -25.2 * sy];
+    }
+    if (type === 'SwitchDpst' || type === 'SwitchDpdt') {
+      const contacts = options.contacts !== false;
+      const dpdt = type === 'SwitchDpdt';
+      const pole2 = dpdt ? 50.4 : 36;
+      const right = contacts ? 31.68 : 36;
+      const px = contacts ? 4.32 : 0;
+      const ax = lx => mx(bodyCenter - 54 + px + (lx - 4.32));
+      points.p1 = [ax(4.32), 0];
+      points.t1 = [ax(right - px + 4.32), dpdt ? -14.4 * sy : 0];
+      if (dpdt) points.t2 = [ax(right - px + 4.32), 14.4 * sy];
+      points.p2 = [ax(4.32), pole2 * sy];
+      if (!dpdt) points.t2 = [ax(right - px + 4.32), pole2 * sy];
+      points.t3 = [ax(right - px + 4.32), dpdt ? (pole2 - 14.4) * sy : pole2 * sy];
+      if (dpdt) points.t4 = [ax(right - px + 4.32), (pole2 + 14.4) * sy];
+    }
+    if (type === 'Inductor2') {
+      const a = bodyCenter - 18, b = bodyCenter + 18;
+      points.NW = [mx(a), -22.32 * sy];
+      points.NE = [mx(b), -22.32 * sy];
+      points.SW = [mx(a), 18 * sy];
+      points.SE = [mx(b), 18 * sy];
+      points.istart = [a, 0];
+      points.iend = [b, 0];
+      points.xy = [a, 0];
+    }
+    if (type === 'Coax') {
+      const r = coaxRadius, l = coaxLead;
+      points.shieldstart = [mx(l), -r * sy];
+      points.shieldstart_top = [mx(l), r * sy];
+      points.shieldend = [mx(length - l), -r * sy];
+      points.shieldend_top = [mx(length - l), r * sy];
+      points.shieldcenter = [mx(length / 2), -r * sy];
+      points.shieldcenter_top = [mx(length / 2), r * sy];
+    }
+    if (type === 'Triax') {
+      points.guardstart = [mx(21.6), -10.8 * sy];
+      points.guardstart_top = [mx(21.6), 10.8 * sy];
+      points.guardend = [mx(86.4), -10.8 * sy];
+      points.guardend_top = [mx(86.4), 10.8 * sy];
+      points.shieldstart = [mx(32.4), -21.6 * sy];
+      points.shieldstart_top = [mx(32.4), 21.6 * sy];
+      points.shieldend = [mx(75.6), -21.6 * sy];
+      points.shieldend_top = [mx(75.6), 21.6 * sy];
+      points.shieldcenter = [mx(54), -21.6 * sy];
+      points.shieldcenter_top = [mx(54), 21.6 * sy];
+    }
+    return points;
+  }
+
+  // Ic-derived chips with fixed pin layouts. `slot` is Schemdraw's 'n/count'
+  // position along a side; `angle` in degree applies to the whole box.
+  const chipDefinitions = {
+    VoltageRegulator: {
+      w: 2, h: 1.5, lead: .5,
+      pins: [
+        { side: 'L', name: 'in', slot: '3/3' },
+        { side: 'R', name: 'out', slot: '3/3' },
+        { side: 'B', name: 'gnd' }
+      ]
+    },
+    DFlipFlop: {
+      w: 2, h: 3, lead: .5,
+      pins: [
+        { side: 'L', name: 'D', slot: '2/2' },
+        { side: 'L', clock: true, slot: '1/2' },
+        { side: 'R', name: 'Q', slot: '2/2' },
+        { side: 'R', name: 'Q', anchor: 'Qbar', overline: true, slot: '1/2' }
+      ],
+      preclr: [
+        { side: 'T', name: 'PRE', invert: true, preclr: true },
+        { side: 'B', name: 'CLR', invert: true, preclr: true }
+      ]
+    },
+    JKFlipFlop: {
+      w: 2, h: 3, lead: .5,
+      pins: [
+        { side: 'L', name: 'J', slot: '3/3' },
+        { side: 'L', clock: true, slot: '2/3' },
+        { side: 'L', name: 'K', slot: '1/3' },
+        { side: 'R', name: 'Q', slot: '3/3' },
+        { side: 'R', name: 'Q', anchor: 'Qbar', overline: true, slot: '1/3' }
+      ],
+      preclr: [
+        { side: 'T', name: 'PRE', invert: true, preclr: true },
+        { side: 'B', name: 'CLR', invert: true, preclr: true }
+      ]
+    },
+    Ic555: {
+      w: 3.5, h: 5, lead: 1, spacing: 1.5, label: '555',
+      pins: [
+        { side: 'L', name: 'TRG', num: '2', slot: '1/3' },
+        { side: 'L', name: 'THR', num: '6', slot: '2/3' },
+        { side: 'L', name: 'DIS', num: '7', slot: '3/3' },
+        { side: 'R', name: 'CTL', num: '5', slot: '1/2' },
+        { side: 'R', name: 'OUT', num: '3', slot: '2/2' },
+        { side: 'T', name: 'RST', num: '4' },
+        { side: 'T', name: 'Vcc', num: '8' },
+        { side: 'B', name: 'GND', num: '1' }
+      ]
+    }
+  };
+
+  const componentDefinitions = {
+    BjtNpn: {
+      transistor: true,
+      anchors: { base: [0, 0], xy: [0, 0], collector: [27.06, -25.08], emitter: [27.06, 25.08], center: [27.06, 0] },
+      defaultDrop: 'collector',
+      reverseCenter: 27.06,
+      extent: [-2, 31, -29, 29],
+      segments: [
+        { path: 'M 0,0 L 13.2,0 M 13.2,-13.2 L 13.2,13.2 M 13.2,-6.6 L 27.06,-18.48 L 27.06,-25.08 M 13.2,6.6 L 27.06,18.48 L 27.06,25.08 M 13.2,6.6 L 20.227,12.623', filled: false },
+        { path: 'M 25.541,17.178 L 17.884,15.356 L 22.57,9.89 Z', filled: true }
+      ]
+    },
+    // Schottky-clamped BJTs: the NPN / PNP glyph plus two small clamp hooks on
+    // the base bar (Schemdraw's `NpnSchottky` / `PnpSchottky`, z = 0.1 units).
+    NpnSchottky: {
+      transistor: true,
+      extendable: true,
+      anchors: { base: [0, 0], xy: [0, 0], collector: [27.06, -25.08], emitter: [27.06, 25.08], center: [27.06, 0] },
+      defaultDrop: 'collector',
+      reverseCenter: 27.06,
+      extent: [-2, 31, -29, 29],
+      segments: [
+        { path: 'M 0,0 L 13.2,0 M 13.2,-13.2 L 13.2,13.2 M 13.2,-6.6 L 27.06,-18.48 L 27.06,-25.08 M 13.2,6.6 L 27.06,18.48 L 27.06,25.08 M 13.2,6.6 L 20.227,12.623', filled: false },
+        { path: 'M 25.541,17.178 L 17.884,15.356 L 22.57,9.89 Z', filled: true },
+        { path: 'M 13.2,-13.2 L 13.2,-16.8 L 16.8,-16.8 L 16.8,-13.2', filled: false },
+        { path: 'M 13.2,13.2 L 13.2,16.8 L 9.6,16.8 L 9.6,13.2', filled: false }
+      ]
+    },
+    PnpSchottky: {
+      transistor: true,
+      extendable: true,
+      anchors: { base: [0, 0], xy: [0, 0], collector: [27.06, 25.08], emitter: [27.06, -25.08], center: [27.06, 0] },
+      defaultDrop: 'emitter',
+      reverseCenter: 27.06,
+      extent: [-2, 31, -29, 29],
+      segments: [
+        { path: 'M 0,0 L 13.2,0 M 13.2,-13.2 L 13.2,13.2 M 13.2,-6.6 L 27.06,-18.48 L 27.06,-25.08 M 13.2,6.6 L 27.06,18.48 L 27.06,25.08 M 27.06,-18.48 L 20.033,-12.457', filled: false },
+        { path: 'M 14.719,-7.902 L 17.69,-15.19 L 22.376,-9.724 Z', filled: true },
+        { path: 'M 13.2,-13.2 L 13.2,-16.8 L 9.6,-16.8 L 9.6,-13.2', filled: false },
+        { path: 'M 13.2,13.2 L 13.2,16.8 L 16.8,16.8 L 16.8,13.2', filled: false }
+      ]
+    },
+    BjtPnp: {
+      transistor: true,
+      anchors: { base: [0, 0], xy: [0, 0], collector: [27.06, 25.08], emitter: [27.06, -25.08], center: [27.06, 0] },
+      defaultDrop: 'emitter',
+      reverseCenter: 27.06,
+      extent: [-2, 31, -29, 29],
+      segments: [
+        { path: 'M 0,0 L 13.2,0 M 13.2,-13.2 L 13.2,13.2 M 13.2,-6.6 L 27.06,-18.48 L 27.06,-25.08 M 13.2,6.6 L 27.06,18.48 L 27.06,25.08 M 27.06,-18.48 L 20.033,-12.457', filled: false },
+        { path: 'M 14.719,-7.902 L 17.69,-15.19 L 22.376,-9.724 Z', filled: true }
+      ]
+    },
+    BjtPnp2c: {
+      transistor: true,
+      anchors: { base: [0, 0], xy: [0, 0], collector: [27.06, 25.08], emitter: [27.06, -25.08], center: [27.06, 0], C2: [27.06, 9.48] },
+      defaultDrop: 'emitter',
+      reverseCenter: 27.06,
+      extent: [-2, 31, -29, 29],
+      segments: [
+        { path: 'M 0,0 L 13.2,0 M 13.2,-13.2 L 13.2,13.2 M 13.2,-6.6 L 27.06,-18.48 L 27.06,-25.08 M 13.2,6.6 L 27.06,18.48 L 27.06,25.08 M 27.06,-18.48 L 20.033,-12.457 M 13.2,-2.4 L 27.06,9.48', filled: false },
+        { path: 'M 14.719,-7.902 L 17.69,-15.19 L 22.376,-9.724 Z', filled: true }
+      ]
+    },
+    IgbtN: {
+      transistor: true,
+      anchors: { base: [2.4, 10.5], xy: [0, 0], collector: [27.06, -25.08], emitter: [27.06, 25.08], center: [27.06, 0] },
+      defaultDrop: 'collector',
+      reverseCenter: 27.06,
+      extent: [-2, 31, -29, 29],
+      segments: [
+        { path: 'M 13.2,-13.2 L 13.2,13.2 M 13.2,-6.6 L 27.06,-18.48 L 27.06,-25.08 M 13.2,6.6 L 27.06,18.48 L 27.06,25.08 M 13.2,6.6 L 20.227,12.623', filled: false },
+        { path: 'M 7.8,-10.5 L 7.8,10.5 L 2.4,10.5', filled: false },
+        { path: 'M 25.541,17.178 L 17.884,15.356 L 22.57,9.89 Z', filled: true }
+      ]
+    },
+    IgbtP: {
+      transistor: true,
+      anchors: { base: [2.4, -10.5], xy: [0, 0], collector: [27.06, 25.08], emitter: [27.06, -25.08], center: [27.06, 0] },
+      defaultDrop: 'emitter',
+      reverseCenter: 27.06,
+      extent: [-2, 31, -29, 29],
+      segments: [
+        { path: 'M 13.2,-13.2 L 13.2,13.2 M 13.2,-6.6 L 27.06,-18.48 L 27.06,-25.08 M 13.2,6.6 L 27.06,18.48 L 27.06,25.08 M 27.06,-18.48 L 20.033,-12.457', filled: false },
+        { path: 'M 2.4,-10.5 L 7.8,-10.5 L 7.8,10.5', filled: false },
+        { path: 'M 14.719,-7.902 L 17.69,-15.19 L 22.376,-9.724 Z', filled: true }
+      ]
+    },
+    NpnPhoto: {
+      transistor: true,
+      anchors: { base: [0, 0], xy: [0, 0], collector: [27.06, -25.08], emitter: [27.06, 25.08], center: [27.06, 0] },
+      defaultDrop: 'collector',
+      reverseCenter: 27.06,
+      extent: [-10, 31, -29, 29],
+      segments: [
+        { path: 'M 13.2,-13.2 L 13.2,13.2 M 13.2,-6.6 L 27.06,-18.48 L 27.06,-25.08 M 13.2,6.6 L 27.06,18.48 L 27.06,25.08 M 13.2,6.6 L 20.227,12.623', filled: false },
+        { path: 'M -3.6,-13.2 L 2.565,-8.816 M -3.6,-4.2 L 2.565,0.184', filled: false },
+        { path: 'M 8.27,-4.759 L 0.479,-5.882 L 4.652,-11.75 Z M 8.27,4.241 L 0.479,3.118 L 4.652,-2.75 Z', filled: true },
+        { path: 'M 25.541,17.178 L 17.884,15.356 L 22.57,9.89 Z', filled: true }
+      ]
+    },
+    PnpPhoto: {
+      transistor: true,
+      anchors: { base: [0, 0], xy: [0, 0], collector: [27.06, 25.08], emitter: [27.06, -25.08], center: [27.06, 0] },
+      defaultDrop: 'emitter',
+      reverseCenter: 27.06,
+      extent: [-10, 31, -29, 29],
+      segments: [
+        { path: 'M 13.2,-13.2 L 13.2,13.2 M 13.2,-6.6 L 27.06,-18.48 L 27.06,-25.08 M 13.2,6.6 L 27.06,18.48 L 27.06,25.08 M 27.06,-18.48 L 20.033,-12.457', filled: false },
+        { path: 'M -3.6,-13.2 L 2.565,-8.816 M -3.6,-4.2 L 2.565,0.184', filled: false },
+        { path: 'M 8.27,-4.759 L 0.479,-5.882 L 4.652,-11.75 Z M 8.27,4.241 L 0.479,3.118 L 4.652,-2.75 Z', filled: true },
+        { path: 'M 14.719,-7.902 L 17.69,-15.19 L 22.376,-9.724 Z', filled: true }
+      ]
+    },
+    AnalogNFet: {
+      transistor: true,
+      analog: true,
+      anchors: { source: [0, 60], drain: [0, 0], gate: [33, 42], center: [0, 30], xy: [0, 0] },
+      defaultDrop: 'source',
+      reverseCenter: 0,
+      extent: [-36, 36, -2, 62],
+      segments: []
+    },
+    AnalogPFet: {
+      transistor: true,
+      analog: true,
+      anchors: { source: [0, 0], drain: [0, 60], gate: [33, 18], center: [0, 30], xy: [0, 0] },
+      defaultDrop: 'drain',
+      reverseCenter: 0,
+      extent: [-36, 36, -2, 62],
+      segments: []
+    },
+    AnalogBiasedFet: {
+      transistor: true,
+      analog: true,
+      anchors: { source: [0, 60], drain: [0, 0], gate: [33, 42], center: [0, 30], xy: [0, 0] },
+      defaultDrop: 'source',
+      reverseCenter: 0,
+      extent: [-36, 36, -2, 62],
+      segments: []
+    },
+    // Untyped BJT and JFET (Schemdraw's `Bjt` / `JFet`). Same geometry as the
+    // NPN / JFetN shapes without the emitter arrow, plus an optional circle.
+    Bjt: {
+      transistor: true,
+      extendable: true,
+      anchors: { base: [0, 0], collector: [27.06, -25.08], emitter: [27.06, 25.08], center: [27.06, 0], xy: [0, 0] },
+      defaultDrop: 'emitter',
+      reverseCenter: 27.06,
+      extent: [-2, 31, -29, 29],
+      segments: [
+        { path: 'M 0,0 L 13.2,0 M 13.2,-13.2 L 13.2,13.2 M 13.2,-6.6 L 27.06,-18.48 L 27.06,-25.08 M 13.2,6.6 L 27.06,18.48 L 27.06,25.08', filled: false }
+      ]
+    },
+    // HEMT (Schemdraw `Hemt`). The gate bar is drawn split or solid, and the
+    // source lead carries an arrow whose direction depends on `source_arrow`.
+    Hemt: {
+      transistor: true,
+      extendable: true,
+      hemt: true,
+      // Schemdraw: source is at the top (local 0,0) and drain at the bottom
+      // (local 0,-1.5 units); the glyph below is in screen coordinates.
+      anchors: { source: [0, 0], drain: [0, 54], gate: [43.2, 27], center: [0, 27], xy: [0, 0] },
+      defaultDrop: 'source',
+      reverseCenter: 0,
+      extent: [-2, 45, -2, 56],
+      segments: []
+    },
+    JFet: {
+      transistor: true,
+      extendable: true,
+      anchors: { source: [0, 48], drain: [0, 0], gate: [33, 33], center: [0, 24], xy: [0, 0] },
+      defaultDrop: 'gate',
+      reverseCenter: 0,
+      // The optional circle (centre 9,24 r 26.4) reaches x -17.4..35.4, y -2.4..50.4.
+      extent: [-19, 37, -4, 52],
+      segments: [
+        { path: 'M 0,0 L 0,15 L 18,15 L 18,10.2 L 18,37.8 L 18,33 L 0,33 L 0,48 M 18,33 L 33,33', filled: false }
+      ]
+    },
+    JFetN: {
+      transistor: true,
+      anchors: { source: [0, 48], drain: [0, 0], gate: [33, 33], center: [0, 24], xy: [0, 0] },
+      defaultDrop: 'gate',
+      reverseCenter: 0,
+      // The optional circle (centre 9,24 r 26.4) reaches x -17.4..35.4, y -2.4..50.4.
+      extent: [-19, 37, -4, 52],
+      segments: [
+        { path: 'M 0,0 L 0,15 L 18,15 L 18,10.2 L 18,37.8 L 18,33 L 0,33 L 0,48 M 18,33 L 33,33 M 21.6,33 L 19.8,33', filled: false },
+        { path: 'M 26.8,33 L 19.8,36.6 L 19.8,29.4 Z', filled: true }
+      ]
+    },
+    JFetP: {
+      transistor: true,
+      anchors: { source: [0, 48], drain: [0, 0], gate: [33, 33], center: [0, 24], xy: [0, 0] },
+      defaultDrop: 'gate',
+      reverseCenter: 0,
+      // The optional circle (centre 9,24 r 26.4) reaches x -17.4..35.4, y -2.4..50.4.
+      extent: [-19, 37, -4, 52],
+      segments: [
+        { path: 'M 0,0 L 0,15 L 18,15 L 18,10.2 L 18,37.8 L 18,33 L 0,33 L 0,48 M 18,33 L 33,33', filled: false },
+        { path: 'M 20,33 L 27,29.4 L 27,36.6 Z', filled: true }
+      ]
+    },
+    NFet: {
+      transistor: true,
+      anchors: { source: [0, 54], drain: [0, 0], gate: [49.2, 27], center: [0, 27], xy: [0, 0] },
+      defaultDrop: 'source',
+      reverseCenter: 0,
+      extent: [-2, 51, -2, 56],
+      segments: [
+        { path: 'M 0,0 L 0,15 L 24,15 L 24,39 L 0,39 L 0,54 M 30,15 L 30,39 M 30,27 L 49.2,27', filled: false }
+      ]
+    },
+    PFet: {
+      transistor: true,
+      anchors: { source: [0, 0], drain: [0, 54], gate: [49.2, 27], center: [0, 27], xy: [0, 0] },
+      defaultDrop: 'drain',
+      reverseCenter: 0,
+      extent: [-2, 51, -2, 56],
+      segments: [
+        { path: 'M 0,0 L 0,15 L 24,15 L 24,39 L 0,39 L 0,54 M 30,15 L 30,39 M 38.4,27 L 49.2,27', filled: false },
+        { circle: [34.2, 27, 4.2] }
+      ]
+    },
+    NMos: {
+      transistor: true,
+      anchors: { drain: [0, 0], gate: [-30, 42], center: [0, 30], source: [0, 60], xy: [0, 0] },
+      defaultDrop: 'source',
+      reverseCenter: 0,
+      extent: [-32, 2, -2, 62],
+      segments: [
+        { path: 'M -9,19.5 L -9,22.5 M -9,28.5 L -9,31.5 M -9,37.5 L -9,40.5 M 0,21 L 0,0 M -9,21 L 0,21 M 0,60 L 0,39 M -9,39 L 0,39 M -30,42 L -15,42 M -15,42 L -15,18 M -3,30 L 0,30 M 0,30 L 0,39', filled: false },
+        { path: 'M -7,30 L -3,27 L -3,33 Z', filled: true }
+      ]
+    },
+    PMos: {
+      transistor: true,
+      anchors: { source: [0, 0], gate: [-30, 18], center: [0, 30], drain: [0, 60], xy: [0, 0] },
+      defaultDrop: 'drain',
+      reverseCenter: 0,
+      extent: [-32, 2, -2, 62],
+      segments: [
+        { path: 'M -9,19.5 L -9,22.5 M -9,28.5 L -9,31.5 M -9,37.5 L -9,40.5 M 0,21 L 0,0 M -9,21 L 0,21 M 0,60 L 0,39 M -9,39 L 0,39 M -30,18 L -15,18 M -15,18 L -15,42 M -9,30 L -6,30 M 0,30 L 0,21', filled: false },
+        { path: 'M -2,30 L -6,33 L -6,27 Z', filled: true }
+      ]
+    },
+    Dot: { anchors: { start: [0, 0], center: [0, 0], end: [0, 0], xy: [0, 0] }, radius: 2.7 },
+    Opamp: lead => ({
+      anchors: { in1: [0, -22.5], in2: [0, 22.5], out: [45 * Math.sqrt(3) + 2 * lead, 0] },
+      defaultDrop: 'out'
+    })
+  };
+
+  // Digital logic gates ported from schemdraw/logic/logic.py. Multi-input
+  // gates (And/Or family) start at the input-lead origin; Buf/Not/Tgate use
+  // schemdraw's Element2Term layout, a 3-unit (108 px) span with the body at
+  // its center. Anchors and default drops match schemdraw 0.23.
+  const logicGateTypes = new Set([
+    'And', 'Nand', 'Or', 'Nor', 'Xor', 'Xnor', 'Buf', 'Not', 'NotNot',
+    'Tgate', 'Tristate', 'Schmitt', 'SchmittNot', 'SchmittAnd', 'SchmittNand'
+  ]);
+  const logicMultiInputTypes = new Set([
+    'And', 'Nand', 'Or', 'Nor', 'Xor', 'Xnor', 'SchmittAnd', 'SchmittNand'
+  ]);
+
+  function buildLogicGate(type, options) {
+    const px = 36, bubble = 0.12 * px, gatel = 0.65 * px;
+    const gateNumber = (key, fallback) => {
+      if (!(key in options)) return fallback;
+      if (typeof options[key] !== 'string' || !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(options[key])) throw new Error(`${key} must be a non-negative number.`);
+      const value = Number(options[key]);
+      if (!Number.isFinite(value) || value < 0) throw new Error(`${key} must be a non-negative number.`);
+      return value * px;
+    };
+    const gateBool = (key, fallback) => {
+      if (!(key in options)) return fallback;
+      if (!['True', 'False'].includes(options[key])) throw new Error(`${key} must be True or False.`);
+      return options[key] === 'True';
+    };
+    let inputs = 2;
+    if (logicMultiInputTypes.has(type) && 'inputs' in options) {
+      if (typeof options.inputs !== 'string' || !/^\d+$/.test(options.inputs)) throw new Error('inputs must be an integer of at least 2.');
+      inputs = Number(options.inputs);
+      if (!Number.isSafeInteger(inputs) || inputs < 2 || inputs > 16) throw new Error('inputs must be an integer between 2 and 16.');
+    }
+    const inputnots = [];
+    if ('inputnots' in options) {
+      if (!logicMultiInputTypes.has(type)) throw new Error(`inputnots is not supported for ${type}.`);
+      if (typeof options.inputnots !== 'string') throw new Error('inputnots must use the form [1] or [1 3].');
+      const match = /^\[([^\]]*)\]$/.exec(options.inputnots);
+      if (!match) throw new Error('inputnots must use the form [1] or [1 3].');
+      const parts = match[1].split(/[\s,]+/).filter(Boolean);
+      for (const part of parts) {
+        if (!/^\d+$/.test(part)) throw new Error('inputnots entries must be integers of at least 1 separated by spaces or commas.');
+        const value = Number(part);
+        if (value < 1 || value > inputs) throw new Error(`inputnots entry ${value} is outside the range 1 to ${inputs}.`);
+        if (inputnots.includes(value)) throw new Error(`inputnots entry ${value} is duplicated.`);
+        inputnots.push(value);
+      }
+    }
+    const segs = [], anchors = Object.create(null);
+    const path = points => points.map(([x, y], i) => `${i ? 'L' : 'M'} ${x.toFixed(4)},${y.toFixed(4)}`).join(' ');
+    const addInputs = (leadinPx, dyPx, xbackFor) => {
+      const backlen = inputs > 3 ? dyPx * (inputs - 1) : 0;
+      for (let i = 0; i < inputs; i++) {
+        const y = -(i + 1 - (inputs / 2 + 0.5)) * dyPx;
+        const name = `in${inputs - i}`;
+        anchors[name] = [0, y];
+        const xback = xbackFor(y, leadinPx);
+        if (inputnots.includes(inputs - i)) {
+          segs.push({ circle: [xback - bubble, y, bubble], filled: false });
+          if (xback - 2 * bubble > 0) segs.push({ path: `M 0,${y.toFixed(4)} L ${(xback - 2 * bubble).toFixed(4)},${y.toFixed(4)}`, filled: false });
+        } else if (xback > 0) {
+          segs.push({ path: `M 0,${y.toFixed(4)} L ${xback.toFixed(4)},${y.toFixed(4)}`, filled: false });
+        }
+      }
+      return backlen;
+    };
+    if (['And', 'Nand', 'SchmittAnd', 'SchmittNand'].includes(type)) {
+      const leadin = gateNumber('leadin', 0.35 * px), leadout = gateNumber('leadout', 0.35 * px);
+      const rad = 0.5 * px, nand = type === 'Nand' || type === 'SchmittNand';
+      const bodyRight = leadin + gatel + rad, out = bodyRight + leadout;
+      const theta = linspace(-Math.PI / 2, Math.PI / 2, 50);
+      const points = theta.map(t => [leadin + gatel + rad * Math.cos(t), -rad * Math.sin(t)]);
+      points.push([leadin + gatel, -rad], [leadin, -rad], [leadin, 0], [leadin, rad], [leadin + gatel, rad]);
+      segs.push({ path: path(points), filled: false });
+      if (nand) segs.push({ circle: [bodyRight + bubble, 0, bubble], filled: false });
+      if (nand) {
+        if (out > bodyRight + 2 * bubble) segs.push({ path: `M ${(bodyRight + 2 * bubble).toFixed(4)},0 L ${out.toFixed(4)},0`, filled: false });
+      } else if (out > bodyRight) {
+        segs.push({ path: `M ${bodyRight.toFixed(4)},0 L ${out.toFixed(4)},0`, filled: false });
+      }
+      const dy = inputs === 2 ? 0.5 * px : inputs === 3 ? 0.33 * px : 0.4 * px;
+      const backlen = addInputs(leadin, dy, (y, li) => li);
+      if (inputs > 3) {
+        const bar = backlen / 2 + dy / 2;
+        segs.push({ path: `M ${leadin.toFixed(4)},${(-bar).toFixed(4)} L ${leadin.toFixed(4)},${bar.toFixed(4)}`, filled: false });
+      }
+      if (type === 'SchmittAnd' || type === 'SchmittNand') {
+        const xofst = leadin + gatel / 2;
+        segs.push({ path: `M ${(xofst + 2.52).toFixed(4)},5.4 L ${(xofst + 9).toFixed(4)},5.4 L ${(xofst + 9).toFixed(4)},-5.4 M ${(xofst + 11.88).toFixed(4)},-5.4 L ${(xofst + 5.4).toFixed(4)},-5.4 L ${(xofst + 5.4).toFixed(4)},5.4`, filled: false });
+      }
+      anchors.out = [out, 0];
+      anchors.end = [out, 0];
+      anchors.center = [out / 2, 0];
+      anchors.xy = [0, 0];
+      const ys = Object.keys(anchors).filter(key => /^in\d+$/.test(key)).map(key => anchors[key][1]);
+      const extent = [-2, out + 2, Math.min(-rad, ...ys) - 2, Math.max(rad, ...ys) + 2];
+      return { anchors, segments: segs, extent, defaultDrop: 'out', reverseCenter: (extent[0] + extent[1]) / 2 };
+    }
+    if (['Or', 'Nor', 'Xor', 'Xnor'].includes(type)) {
+      const leadin = gateNumber('leadin', 0.35 * px), leadout = gateNumber('leadout', 0.35 * px);
+      const nor = type === 'Nor' || type === 'Xnor', xor = type === 'Xor' || type === 'Xnor';
+      const gatelU = 0.65, orflatU = 0.5, xorgapU = 0.15;
+      const xs0 = linspace(0, gatelU + 0.05, 50);
+      const ys0 = xs0.map(x => x * x);
+      const ymax = Math.max(...ys0);
+      let ys = ys0.map(y => y - ymax);
+      ys = [Math.min(...ys), ...ys];
+      let xs = [0, ...xs0.map(x => x + orflatU)];
+      let y2 = linspace(Math.min(...ys), -Math.min(...ys), 50);
+      let x2 = y2.map(y => -y * y);
+      const back = Math.min(...x2);
+      x2 = x2.map(x => x - back);
+      const leadinEffU = leadin / px - (xor ? xorgapU : 0);
+      xs = xs.map(x => x + leadinEffU);
+      x2 = x2.map(x => x + leadinEffU);
+      const tipU = Math.max(...xs), orheightU = Math.abs(Math.min(...ys));
+      const points = [];
+      for (let i = 0; i < xs.length; i++) points.push([xs[i] * px, -ys[i] * px]);
+      for (let i = xs.length - 1; i >= 0; i--) points.push([xs[i] * px, ys[i] * px]);
+      for (let i = x2.length - 1; i >= 0; i--) points.push([x2[i] * px, -y2[i] * px]);
+      segs.push({ path: path(points), filled: false });
+      if (xor) segs.push({ path: path(x2.map((x, i) => [(x - xorgapU) * px, -y2[i] * px])), filled: false });
+      const tip = tipU * px, orheight = orheightU * px;
+      if (nor) segs.push({ circle: [tip + bubble, 0, bubble], filled: false });
+      const out = tip + leadout;
+      if (nor) {
+        if (out > tip + 2 * bubble) segs.push({ path: `M ${(tip + 2 * bubble).toFixed(4)},0 L ${out.toFixed(4)},0`, filled: false });
+      } else if (out > tip) {
+        segs.push({ path: `M ${tip.toFixed(4)},0 L ${out.toFixed(4)},0`, filled: false });
+      }
+      const leadinEff = leadinEffU * px;
+      const dy = inputs === 2 ? 0.5 * px : inputs === 3 ? 0.33 * px : 0.4 * px;
+      const backlen = addInputs(leadinEff, dy, (y, li) => {
+        if (inputs > 3 && Math.abs(y) > orheight) return li;
+        return li - (y * y) / px - back * px;
+      });
+      if (inputs > 3) {
+        const bar = backlen / 2 + dy / 2;
+        segs.push({ path: `M ${leadinEff.toFixed(4)},${(-bar).toFixed(4)} L ${leadinEff.toFixed(4)},${(-orheight).toFixed(4)}`, filled: false });
+        segs.push({ path: `M ${leadinEff.toFixed(4)},${bar.toFixed(4)} L ${leadinEff.toFixed(4)},${orheight.toFixed(4)}`, filled: false });
+      }
+      anchors.out = [out, 0];
+      anchors.end = [out, 0];
+      anchors.center = [out / 2, 0];
+      anchors.xy = [0, 0];
+      const ysAll = Object.keys(anchors).filter(key => /^in\d+$/.test(key)).map(key => anchors[key][1]);
+      const extent = [-2, out + 2, Math.min(-orheight, ...ysAll) - 2, Math.max(orheight, ...ysAll) + 2];
+      return { anchors, segments: segs, extent, defaultDrop: 'out', reverseCenter: (extent[0] + extent[1]) / 2 };
+    }
+    if (type === 'Buf' || type === 'Not' || type === 'NotNot' || type === 'Schmitt' || type === 'SchmittNot') {
+      const isNot = type === 'Not' || type === 'SchmittNot';
+      const isNotNot = type === 'NotNot';
+      const inX = isNot ? 37.98 : 42.3;
+      const outX = isNot ? 70.02 : isNotNot ? 74.34 : 65.7;
+      const tipX = isNot ? 61.38 : 65.7;
+      segs.push({ path: `M 0,0 L ${(isNotNot ? 33.66 : inX).toFixed(2)},0 M ${outX.toFixed(2)},0 L 108,0`, filled: false });
+      segs.push({ path: `M ${inX.toFixed(2)},-18 L ${tipX.toFixed(2)},0 L ${inX.toFixed(2)},18 Z`, filled: false });
+      if (isNot) segs.push({ circle: [65.7, 0, 4.32], filled: false });
+      if (isNotNot) {
+        segs.push({ circle: [70.02, 0, 4.32], filled: false });
+        segs.push({ circle: [70.02, 0, 4.32], filled: false });
+        segs.push({ circle: [37.98, 0, 4.32], filled: false });
+      }
+      if (type === 'Schmitt') segs.push({ path: 'M 44.82,5.4 L 51.3,5.4 L 51.3,-5.4 M 54.18,-5.4 L 47.7,-5.4 L 47.7,5.4', filled: false });
+      if (type === 'SchmittNot') segs.push({ path: 'M 40.5,5.4 L 46.98,5.4 L 46.98,-5.4 M 49.86,-5.4 L 43.38,-5.4 L 43.38,5.4', filled: false });
+      Object.assign(anchors, {
+        start: [0, 0], end: [108, 0], center: [54, 0], in1: [inX, 0], out: [outX, 0], xy: [inX, 0]
+      });
+      return { anchors, segments: segs, extent: [-2, 110, -22, 22], defaultDrop: 'end', reverseCenter: 54 };
+    }
+    if (type === 'Tgate') {
+      segs.push({ path: 'M 0,0 L 42.3,0 M 65.7,0 L 108,0', filled: false });
+      segs.push({ path: 'M 42.3,0 L 42.3,18 L 65.7,0 L 42.3,-18 Z', filled: false });
+      segs.push({ path: 'M 65.7,0 L 65.7,18 L 42.3,0 L 65.7,-18 Z', filled: false });
+      segs.push({ circle: [54, -12.96, 2.88], filled: false });
+      segs.push({ path: 'M 54,-15.84 L 54,-25.2', filled: false });
+      segs.push({ path: 'M 54,10.08 L 54,25.2', filled: false });
+      Object.assign(anchors, {
+        start: [0, 0], end: [108, 0], center: [54, 0], in1: [42.3, 0], out: [65.7, 0],
+        c: [54, 25.2], cbar: [54, -25.2], xy: [42.3, 0]
+      });
+      return { anchors, segments: segs, extent: [-2, 110, -30, 30], defaultDrop: 'end', reverseCenter: 54 };
+    }
+    if (type === 'Tristate') {
+      const outputnot = gateBool('outputnot', true), controlnot = gateBool('controlnot', false);
+      const inX = outputnot ? 37.98 : 42.3;
+      const outX = outputnot ? 70.02 : 74.34;
+      const tipX = outputnot ? 61.38 : 65.7;
+      const ctlX = outputnot ? 49.68 : 54;
+      segs.push({ path: `M 0,0 L ${inX},0 M ${tipX},0 L 108,0`, filled: false });
+      segs.push({ path: `M ${inX},-18 L ${tipX},0 L ${inX},18 Z`, filled: false });
+      if (outputnot) segs.push({ circle: [65.7, 0, 4.32], filled: false });
+      if (controlnot) {
+        segs.push({ circle: [ctlX, -15.12, 4.32], filled: false });
+        segs.push({ path: `M ${ctlX},-19.44 L ${ctlX},-25.2`, filled: false });
+      } else {
+        segs.push({ path: `M ${ctlX},-10.08 L ${ctlX},-25.2`, filled: false });
+      }
+      Object.assign(anchors, {
+        start: [0, 0], end: [108, 0], center: [54, 0], in1: [inX, 0], out: [outX, 0],
+        c: [ctlX, -25.2], xy: [inX, 0]
+      });
+      return { anchors, segments: segs, extent: [-2, 110, -30, 30], defaultDrop: 'end', reverseCenter: 54 };
+    }
+    throw new Error(`Unsupported logic gate: ${type}`);
+  }
+
+  function renderPathSegments(segments, color, stroke) {
+    return segments.map(segment => segment.circle
+      ? `<circle cx="${segment.circle[0]}" cy="${segment.circle[1]}" r="${segment.circle[2]}" fill="${segment.filled ? color : 'none'}" stroke="${color}" stroke-width="2"/>`
+      : segment.filled
+        ? `<path d="${segment.path}" fill="${color}" stroke="${color}"/>`
+        : `<path d="${segment.path}" ${stroke}/>`).join('');
+  }
+
   // CSS named colors also accepted by Schemdraw's color validator.
   const namedColors = new Set(('aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory khaki lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan lightgoldenrodyellow lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime limegreen linen magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen mediumslateblue mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream mistyrose moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow yellowgreen').split(' '));
 
   function readColor(value) {
-    if (typeof value !== 'string') throw new Error('color に色名または16進カラーを指定してください。');
+    if (typeof value !== 'string') throw new Error('color must be a color name or hexadecimal color.');
     const color = value.toLowerCase();
-    if (!namedColors.has(color) && !/^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/.test(color)) throw new Error(`未対応または不正な色: ${value}`);
+    if (!namedColors.has(color) && !/^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/.test(color)) throw new Error(`Unsupported or invalid color: ${value}`);
     return color;
   }
 
-  function parse(source) {
-    if (typeof source !== 'string') throw new TypeError('ソースは文字列で指定してください。');
-    const lines = source.split(/\r?\n/).map(s => s.trim()).filter(s => s && !s.startsWith('#'));
-    if (!/^circuit\s*\{$/.test(lines.shift() || '')) throw new Error('circuit { ... } を1ブロック指定してください。');
+  // Heuristics for a line that is probably the tail of the previous component:
+  // an unpaired quote, an argument keyword without `component:`, or a lone direction.
+  function breakErrorSignal(line) {
+    const raw = line.replace(/\\\\|\\"|\\'/g, '');
+    const double = (raw.match(/"/g) || []).length;
+    const single = (raw.match(/'/g) || []).length;
+    if (double % 2 || single % 2) return true;
+    if (/^(?:at|anchor|drop|theta|color|length|shift|label|to|tox|toy|endpoints)\s*=/.test(line)) return true;
+    if (/^(?:left|right|up|down|hold|dot|idot|flip|reverse)$/.test(line)) return true;
+    return false;
+  }
+
+  function parse(source, subs = null) {
+    if (typeof source !== 'string') throw new TypeError('source must be a string.');
+    // One part per line: arguments are whitespace-separated and a component
+    // is not continued across lines. Line numbers are kept so that an
+    // accidental line break can be reported against the source line.
+    const lines = source.split(/\r?\n/).map((s, i) => ({ text: s.trim(), number: i + 1 }))
+      .filter(s => s.text && !s.text.startsWith('#'));
+    if (!/^circuit\s*\{$/.test(lines.shift()?.text || '')) throw new Error('Specify exactly one circuit { ... } block.');
+    const breakError = (number, detail) =>
+      new Error(`Line ${number}: line break error. ${detail}Write each component on one line.`);
     const records = [], frames = [];
-    let closed = false;
-    for (const line of lines) {
-      if (closed) throw new Error('circuit ブロックの後に余分な入力があります。');
+    let closed = false, previousNumber = 0;
+    for (const { text: line, number } of lines) {
+      if (closed) throw new Error('Unexpected input after the circuit block.');
       if (line === '}') {
         const frame = frames.pop();
         if (!frame) closed = true;
         else if (frame.kind === 'hold') records.push({ type: '__hold_end' });
-        else if (frame.count !== 1) throw new Error(`名前付きブロック ${frame.name} は部品を1個含めてください。`);
+        else if (frame.count !== 1) throw new Error(`Named block ${frame.name} must contain exactly one component.`);
         continue;
       }
       const named = /^([A-Za-z_]\w*)\s*\{$/.exec(line);
       if (named) {
         if (named[1] === 'hold') {
-          if (frames.some(frame => frame.kind === 'name')) throw new Error('名前付きブロック内に hold ブロックは置けません。');
+          if (frames.some(frame => frame.kind === 'name')) throw new Error('A hold block cannot be placed inside a named block.');
           frames.push({ kind: 'hold' }); records.push({ type: '__hold_start' });
         } else {
-          if (frames.some(frame => frame.kind === 'name')) throw new Error('名前付きブロックの入れ子には対応していません。');
+          if (frames.some(frame => frame.kind === 'name')) throw new Error('Nested named blocks are not supported.');
           frames.push({ kind: 'name', name: named[1], count: 0 });
         }
         continue;
       }
       const match = /^([A-Za-z_]\w*)\s*:\s*(.*)$/.exec(line);
-      if (!match) throw new Error(`部品の記述を解析できません: ${line}`);
+      if (!match) {
+        // Text that belongs to a previous component's argument list was split
+        // off by a line break, e.g. `label="'x'` / `loc='bot'"` or a bare `left`
+        // on its own line after `and: at="A.out"`.
+        if (breakErrorSignal(line)) throw breakError(number, `This line looks like a continuation of the previous component (line ${previousNumber}). `);
+        if (line.startsWith(';')) throw new Error(`Line ${number}: syntax error. \`;\` is not used in fleming notation; separate arguments with whitespace.`);
+        throw new Error(`Cannot parse component declaration: ${line}`);
+      }
+      previousNumber = number;
       const args = [], input = match[2];
-      const token = /\s*([A-Za-z_]\w*)(?:\s*=\s*(?:"((?:\\\\|\\"|[^"\\\r\n]|\\(?!["\\]))*)"|([^\s]+)))?/gy;
+      // Bare values end at whitespace, except inside brackets or parentheses,
+      // so list values such as inputnots=[1 3] keep their inner spaces.
+      const token = /\s*([A-Za-z_]\w*)(?:\s*=\s*(?:"((?:\\\\|\\"|[^"\\\r\n]|\\(?!["\\]))*)"|(\[[^\[\]\r\n]*\]|\([^()\r\n]*\)|[^\s]+)))?/gy;
       while (token.lastIndex < input.length) {
         const at = token.lastIndex, m = token.exec(input);
-        if (!m || token.lastIndex === at) throw new Error(`引数を解析できません: ${input.slice(at)}`);
-        args.push({ key: m[1], value: m[2] !== undefined ? m[2].replace(/\\\\|\\"/g, s => s === '\\"' ? '"' : s) : m[3] });
+        if (!m || token.lastIndex === at) {
+          const rest = input.slice(at).trim();
+          // `;` is not part of the grammar: fleming has no statement terminator.
+          if (rest.startsWith(';')) throw new Error(`Line ${number}: syntax error. \`;\` is not used in fleming notation; separate arguments with whitespace.`);
+          throw new Error(`Cannot parse arguments: ${rest}`);
+        }
+        let value = m[2];
+        if (value === undefined) {
+          if (m[3] === undefined) {
+            args.push({ key: m[1], value: undefined });
+            continue;
+          }
+          value = m[3];
+          for (const [open, close] of [['[', ']'], ['(', ')']]) {
+            if (!value.startsWith(open)) continue;
+            let depth = 0, closed = false;
+            for (let i = 0; i < value.length; i++) {
+              if (value[i] === open) depth++;
+              else if (value[i] === close && --depth === 0) {
+                if (i !== value.length - 1) throw new Error(`Mismatched argument parentheses: ${value}`);
+                closed = true;
+                break;
+              }
+            }
+            if (!closed) throw new Error(`Unclosed argument parenthesis: ${value}`);
+          }
+        } else {
+          value = value.replace(/\\\\|\\"/g, s => s === '\\"' ? '"' : s);
+        }
+        args.push({ key: m[1], value });
       }
       const namedFrame = frames.find(frame => frame.kind === 'name');
       if (namedFrame) namedFrame.count++;
-      records.push({ type: match[1], name: namedFrame ? namedFrame.name : null, args });
+      const sub = Boolean(subs && Object.prototype.hasOwnProperty.call(subs, match[1]));
+      records.push({ type: match[1], name: namedFrame ? namedFrame.name : null, args, sub });
     }
-    if (!closed || frames.length) throw new Error('ブロックの閉じ括弧が不足しています。');
-    if (!records.some(record => !record.type.startsWith('__hold_') && !['config', 'move', 'move_from', 'print'].includes(record.type))) throw new Error('部品を1個以上指定してください。');
+    if (!closed || frames.length) throw new Error('Missing closing brace for a block.');
+    if (!records.some(record => !record.type.startsWith('__hold_') && !['config', 'move', 'move_from', 'print'].includes(record.type))) throw new Error('Specify at least one component.');
     return records;
   }
 
   function readLength(value, unit) {
     if (/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(value || '')) {
       const result = Number(value) * 36;
-      if (!Number.isFinite(result) || result <= 0) throw new Error(`不正な長さです: ${value}`);
+      if (!Number.isFinite(result) || result <= 0) throw new Error(`Invalid length: ${value}`);
       return result;
     }
     const m = /^d\.unit(?:\s*\/\s*(\d+(?:\.\d+)?))?$/.exec(value || '');
-    if (!m || (m[1] && Number(m[1]) === 0)) throw new Error(`対応していない長さの式です: ${value}`);
+    if (!m || (m[1] && Number(m[1]) === 0)) throw new Error(`Unsupported length expression: ${value}`);
     return unit / (m[1] ? Number(m[1]) : 1);
   }
 
   // Drawing.move uses signed drawing-unit offsets, not SVG coordinates.
   function readMove(value, unit) {
-    if (typeof value !== 'string') throw new Error('move の座標には数値または d.unit を指定してください。');
+    if (typeof value !== 'string') throw new Error('Move coordinates must be a number or d.unit expression.');
     const match = /^([+-]?)(?:(\d+(?:\.\d*)?|\.\d+)|d\.unit(?:\s*\/\s*(\d+(?:\.\d+)?))?)$/.exec(value);
-    if (!match) throw new Error(`対応していない move の座標: ${value}`);
+    if (!match) throw new Error(`Unsupported move coordinate: ${value}`);
     const divisor = match[3] === undefined ? 1 : Number(match[3]);
-    if (!Number.isFinite(divisor) || divisor <= 0) throw new Error(`不正な move の座標: ${value}`);
+    if (!Number.isFinite(divisor) || divisor <= 0) throw new Error(`Invalid move coordinate: ${value}`);
     const result = (match[2] === undefined ? unit / divisor : Number(match[2]) * 36) * (match[1] === '-' ? -1 : 1);
-    if (!Number.isFinite(result)) throw new Error(`不正な move の座標: ${value}`);
+    if (!Number.isFinite(result)) throw new Error(`Invalid move coordinate: ${value}`);
     return result;
   }
 
   function readLabel(value) {
-    if (value === undefined) throw new Error('label の値が必要です。');
+    if (value === undefined) throw new Error('A label value is required.');
     if (value.startsWith('[')) {
       let rest = value.slice(1).trim();
       const items = [];
       while (rest && rest[0] !== ']') {
-        const match = /^'((?:[^'\\]|\\['\\])*)'/.exec(rest);
-        if (!match) throw new Error(`リストラベルが不正です: ${value}`);
-        items.push(match[1].replace(/\\(['\\])/g, '$1'));
+        const match = /^'((?:[^'\\]|\\.)*)'/.exec(rest);
+        if (!match) throw new Error(`Invalid list label: ${value}`);
+        items.push(match[1].replace(/\\(['\\n])/g, (m, c) => c === 'n' ? '\n' : c));
         rest = rest.slice(match[0].length);
         if (rest.startsWith(']')) break;
         const separator = /^\s+/.exec(rest);
-        if (!separator) throw new Error(`リストラベルは空白で区切ってください: ${value}`);
+        if (!separator) throw new Error(`List label entries must be separated by whitespace: ${value}`);
         rest = rest.slice(separator[0].length);
       }
-      if (!items.length || rest !== ']') throw new Error(`リストラベルが不正です: ${value}`);
-      return { items, loc: null };
+      if (!items.length || !rest.startsWith(']')) throw new Error(`Invalid list label: ${value}`);
+      // Schemdraw gives each label() call its own loc, list labels included.
+      const label = { items, loc: null, halign: null, ofst: null };
+      return readLabelArgs(label, rest.slice(1), value);
     }
     if (!value.startsWith("'")) return { text: value, loc: null, halign: null, ofst: null };
-    const text = /^'((?:[^'\\]|\\['\\])*)'/.exec(value);
-    if (!text) throw new Error(`label の引数が不正です: ${value}`);
-    const label = { text: text[1].replace(/\\(['\\])/g, '$1'), loc: null, halign: null, ofst: null };
-    let rest = value.slice(text[0].length);
+    const text = /^'((?:[^'\\]|\\.)*)'/.exec(value);
+    if (!text) throw new Error(`Invalid label argument: ${value}`);
+    const label = { text: text[1].replace(/\\(['\\n])/g, (m, c) => c === 'n' ? '\n' : c), loc: null, halign: null, ofst: null };
+    return readLabelArgs(label, value.slice(text[0].length), value);
+  }
+
+  // Parse the arguments that may follow a label's text, e.g. `loc='bot'`.
+  function readLabelArgs(label, rest, value) {
     const seen = new Set();
     while (rest) {
       const separator = /^\s+/.exec(rest);
-      if (!separator) throw new Error(`label の引数が不正です: ${value}`);
+      if (!separator) throw new Error(`Invalid label argument: ${value}`);
       rest = rest.slice(separator[0].length);
       if (!rest) {
         break;
       }
-      const arg = /^(loc|halign)\s*=\s*'(\w+)'|^(ofst)\s*=\s*\(\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s+([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*\)/.exec(rest);
-      if (!arg) throw new Error(`label の引数が不正です: ${value}`);
-      const key = arg[1] || arg[3];
-      if (seen.has(key)) throw new Error(`label の引数が重複しています: ${key}`);
+      const arg = /^(loc|halign|valign|color)\s*=\s*'([\w#]+)'|^(ofst)\s*=\s*\(\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s+([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*\)|^(ofst|rotate|fontsize)\s*=\s*(True|False|[+-]?(?:\d+(?:\.\d*)?|\.\d+))/.exec(rest);
+      if (!arg) throw new Error(`Invalid label argument: ${value}`);
+      const key = arg[1] || arg[3] || arg[6];
+      if (seen.has(key)) throw new Error(`Duplicate label argument: ${key}`);
       seen.add(key);
       if (key === 'loc') {
-        if (!['top', 'bot', 'left', 'right', 'start', 'end'].includes(arg[2])) throw new Error(`label の位置が不正です: ${arg[2]}`);
+        if (!['top', 'bot', 'left', 'right', 'start', 'end', 'base', 'collector', 'emitter', 'center', 'C2', 'gate', 'source', 'drain', 'bulk', 'name', 'in1', 'in2', 'out', 'c', 'cbar', 'display'].includes(arg[2]) && !/^in\d+$/.test(arg[2])) throw new Error(`Invalid label location: ${arg[2]}`);
         label.loc = arg[2];
       } else if (key === 'halign') {
-        if (!['left', 'center', 'right'].includes(arg[2])) throw new Error(`label の配置が不正です: ${arg[2]}`);
+        if (!['left', 'center', 'right'].includes(arg[2])) throw new Error(`Invalid label alignment: ${arg[2]}`);
         label.halign = arg[2];
+      } else if (key === 'valign') {
+        if (!['top', 'center', 'bottom'].includes(arg[2])) throw new Error(`Invalid label alignment: ${arg[2]}`);
+        label.valign = arg[2];
+      } else if (key === 'color') {
+        label.color = readColor(arg[2]);
+      } else if (key === 'fontsize') {
+        label.fontsize = Number(arg[7]);
+        if (!Number.isFinite(label.fontsize) || label.fontsize <= 0) throw new Error('label fontsize must be a finite positive number.');
+      } else if (key === 'ofst') {
+        if (arg[3]) label.ofst = [Number(arg[4]), Number(arg[5])];
+        else {
+          if (arg[7] === 'True' || arg[7] === 'False') throw new Error(`Invalid label offset: ${value}`);
+          label.ofst = Number(arg[7]);
+        }
+        if (!(Array.isArray(label.ofst) ? label.ofst.every(Number.isFinite) : Number.isFinite(label.ofst))) throw new Error(`Invalid label offset: ${value}`);
       } else {
-        label.ofst = [Number(arg[4]), Number(arg[5])];
-        if (!label.ofst.every(Number.isFinite)) throw new Error(`label のオフセットが不正です: ${value}`);
+        label.rotate = arg[7] === 'True' ? true : arg[7] === 'False' ? false : Number(arg[7]);
+        if (typeof label.rotate === 'number' && !Number.isFinite(label.rotate)) throw new Error(`Invalid label rotation: ${value}`);
       }
       rest = rest.slice(arg[0].length);
     }
     return label;
   }
 
-  function labelContent(text) {
-    if (!(text.startsWith('$') && text.endsWith('$'))) return escapeText(text);
-    const math = text.slice(1, -1);
-    // A deliberately small math subset: ordinary text and _{subscript} or _x.
-    if (!/^(?:[A-Za-z0-9Ωμµ+ .-]|_(?:\{[A-Za-z0-9]+\}|[A-Za-z0-9]))+$/.test(math)) {
-      throw new Error(`対応していない数式ラベルです: ${text}`);
+  // LaTeX commands accepted inside `$...$`. Only the handful of symbols that
+  // schemdraw's examples use are translated; anything else is an error.
+  const mathGreek = {
+    alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ε', zeta: 'ζ', eta: 'η',
+    theta: 'θ', iota: 'ι', kappa: 'κ', lambda: 'λ', mu: 'μ', nu: 'ν', xi: 'ξ', pi: 'π',
+    rho: 'ρ', sigma: 'σ', tau: 'τ', upsilon: 'υ', phi: 'φ', chi: 'χ', psi: 'ψ', omega: 'ω',
+    Gamma: 'Γ', Delta: 'Δ', Theta: 'Θ', Lambda: 'Λ', Xi: 'Ξ', Pi: 'Π', Sigma: 'Σ',
+    Upsilon: 'Υ', Phi: 'Φ', Psi: 'Ψ', Omega: 'Ω'
+  };
+  const mathSymbols = {
+    pm: '±', mp: '∓', times: '×', cdot: '·', div: '÷', le: '≤', leq: '≤', ge: '≥', geq: '≥',
+    ne: '≠', neq: '≠', approx: '≈', infty: '∞', degree: '°', circ: '°', ang: '∠'
+  };
+
+  // Render `$...$`: sub/superscripts and a few Greek/symbol commands.
+  function mathContent(math, source) {
+    const text = math.replace(/\\([A-Za-z]+)/g, (match, name) => {
+      if (Object.prototype.hasOwnProperty.call(mathGreek, name)) return mathGreek[name];
+      if (Object.prototype.hasOwnProperty.call(mathSymbols, name)) return mathSymbols[name];
+      throw new Error(`Unsupported math command in label: ${match}`);
+    });
+    if (!/^(?:[A-Za-z0-9Ωμµ+ .\-−≤≥≠≈∞±∓×·÷°∠]|[\^_](?:\{[A-Za-z0-9]+\}|[A-Za-z0-9]))+$/.test(text)) {
+      throw new Error(`Unsupported math label: ${source}`);
     }
-    return escapeText(math).replace(/_(?:\{([A-Za-z0-9]+)\}|([A-Za-z0-9]))/g,
-      (_, a, b) => `<tspan baseline-shift="sub" font-size="70%">${a || b}</tspan>`);
+    return escapeText(text)
+      .replace(/([\^_])(?:\{([A-Za-z0-9]+)\}|([A-Za-z0-9]))/g,
+        (_, mark, a, b) => `<tspan baseline-shift="${mark === '^' ? 'super' : 'sub'}" font-size="70%">${a || b}</tspan>`);
   }
 
-  function renderCircuit(source, log = () => {}) {
-    const records = parse(source);
-    log('circuit ブロックを検出しました。');
-    const elements = [], names = Object.create(null), heldStates = [];
-    let x = 0, y = 0, direction = 'right', unit = defaultUnit;
+  // A label may mix plain text and `$...$` math, and may contain newlines.
+  function labelContent(text) {
+    let out = '';
+    let index = 0;
+    while (index < text.length) {
+      const start = text.indexOf('$', index);
+      if (start === -1) { out += escapeText(text.slice(index)); break; }
+      if (start > index) out += escapeText(text.slice(index, start));
+      const end = text.indexOf('$', start + 1);
+      if (end === -1) { out += escapeText(text.slice(start)); break; }
+      out += mathContent(text.slice(start + 1, end), text);
+      index = end + 1;
+    }
+    return out;
+  }
+
+  // Split a `<text>` element holding newlines into one tspan per line.
+  function expandMultiline(svg) {
+    return svg.replace(/<text ([^>]*)>([\s\S]*?)<\/text>/g, (match, attrs, body) => {
+      if (body.indexOf('\n') === -1) return match;
+      const x = /\bx="([^"]*)"/.exec(attrs);
+      if (!x) return match;
+      const size = /\bfont-size="([^"]*)"/.exec(attrs);
+      const step = size ? size[1] : '14';
+      // A single tspan wrapper (baseline shift) keeps its attributes on the
+      // first line; later lines reuse the x and the line height.
+      const wrapped = /^<tspan ([^>]*)>([\s\S]*)<\/tspan>$/.exec(body);
+      // Multi-line blocks align like schemdraw: labels above an element end at
+      // the anchor, labels beside it are centred on it, labels below grow down.
+      const lineCount = (wrapped ? wrapped[2] : body).split('\n').length;
+      if (lineCount > 1) {
+        const shift = /dominant-baseline="ideographic"/.test(attrs)
+          ? (lineCount - 1) * Number(step)
+          : /dominant-baseline="hanging"/.test(attrs)
+            ? 0
+            : (lineCount - 1) * Number(step) / 2 + 5;
+        if (shift) attrs = attrs.replace(/\by="([^"]*)"/, (m, v) => `y="${Number(v) - shift}"`);
+      }
+      if (wrapped && wrapped[2].indexOf('<tspan') === -1) {
+        const spans = wrapped[2].split('\n')
+          .map((line, i) => i === 0
+            ? `<tspan ${wrapped[1]}>${line}</tspan>`
+            : `<tspan x="${x[1]}" dy="${step}">${line}</tspan>`)
+          .join('');
+        return `<text ${attrs}>${spans}</text>`;
+      }
+      const spans = body.split('\n')
+        .map((line, i) => `<tspan x="${x[1]}" dy="${i ? step : 0}">${line}</tspan>`)
+        .join('');
+      return `<text ${attrs}>${spans}</text>`;
+    });
+  }
+
+  function renderCircuit(source, log = () => {}, subs = null) {
+    const records = parse(source, subs);
+    const result = renderRecords(records, log, subs);
+    return buildSvg(result);
+  }
+
+  // Assemble the pieces collected by renderRecords into one SVG document.
+  function buildSvg({ elements, minX, minY, maxX, maxY, labelSize, inchesPerUnit }) {
+    // Keep large label text from touching the viewport edge.
+    const padding = Math.max(8, Math.round(labelSize * 0.6));
+    const width = maxX - minX + 2 * padding, height = maxY - minY + 2 * padding;
+    const viewBox = `${minX - padding} ${minY - padding} ${width} ${height}`;
+    // Schemdraw's SVG backend writes the viewBox size in points, so the drawing
+    // keeps its intrinsic size when embedded.
+    const size = ` width="${Number(width.toFixed(3))}pt" height="${Number(height.toFixed(3))}pt"`;
+    return `<svg xmlns="http://www.w3.org/2000/svg"${size} viewBox="${viewBox}" role="img" aria-label="Circuit diagram">${expandMultiline(elements.join(''))}</svg>`;
+  }
+
+  // Draw one block of components and return the finished geometry. Subcircuits
+  // call this recursively with their own local coordinates.
+  function renderRecords(records, log = () => {}, subs = null, depth = 0) {
+    log('Detected circuit block.');
+    const elements = [], names = Object.create(null), namedTypes = Object.create(null), namedDirs = Object.create(null), namedBoxes = Object.create(null), namedReversed = Object.create(null), blockAnchors = Object.create(null), heldStates = [], overlay = [];
+    let elemBox = null;
+    let x = 0, y = 0, direction = 'right', unit = defaultUnit, labelSize = 14, labelSizeSet = false, inchesPerUnit = null;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     const bounds = (x1, y1, x2, y2) => {
       minX = Math.min(minX, x1, x2); maxX = Math.max(maxX, x1, x2);
       minY = Math.min(minY, y1, y2); maxY = Math.max(maxY, y1, y2);
+      if (elemBox) {
+        elemBox.x1 = Math.min(elemBox.x1, x1, x2); elemBox.x2 = Math.max(elemBox.x2, x1, x2);
+        elemBox.y1 = Math.min(elemBox.y1, y1, y2); elemBox.y2 = Math.max(elemBox.y2, y1, y2);
+      }
+    };
+    // Contact/terminal markers filled with the background colour are collected
+    // here and appended after every element. Schemdraw gives these segments a
+    // higher zorder, so a lead drawn later must not paint over them.
+    const bgMarker = (cx, cy, r, markerColor, markerFill = 'white') => {
+      overlay.push(`<circle cx="${cx}" cy="${cy}" r="${r}" fill="${markerFill}" stroke="${markerColor}" stroke-width="2"/>`);
+    };
+    const whiteMarker = bgMarker;
+    // Local → world for the `translate(ox oy) rotate(-deg) scale(sx sy)` groups
+    // used by the stand-alone symbols.
+    const localToWorld = (ox, oy, sx, sy, degrees) => {
+      const a = -degrees * Math.PI / 180, cos = Math.cos(a), sin = Math.sin(a);
+      return (lx, ly) => [ox + lx * sx * cos - ly * sy * sin, oy + lx * sx * sin + ly * sy * cos];
     };
     const point = ref => {
       const m = /^([A-Za-z_]\w*)\.([A-Za-z_]\w*)$/.exec(ref || '');
-      if (!m || !Object.prototype.hasOwnProperty.call(names, m[1]) || !Object.prototype.hasOwnProperty.call(names[m[1]], m[2])) throw new Error(`不明な端子参照: ${ref}`);
+      if (!m || !Object.prototype.hasOwnProperty.call(names, m[1]) || !Object.prototype.hasOwnProperty.call(names[m[1]], m[2])) throw new Error(`Unknown terminal reference: ${ref}`);
       return names[m[1]][m[2]];
     };
     const atPoint = value => {
@@ -208,40 +1718,87 @@
       const match = new RegExp(`^\\(\\s*(${n})\\s+(${n})\\s*\\)$`).exec(value);
       if (!match) return point(value);
       const px = Number(match[1]) * 36, py = -Number(match[2]) * 36;
-      if (!Number.isFinite(px) || !Number.isFinite(py)) throw new Error('at の座標は有限の数値で指定してください。');
+      if (!Number.isFinite(px) || !Number.isFinite(py)) throw new Error('at coordinates must be finite numbers.');
       return [px, py];
     };
     for (const record of records) {
-      const { type, name, args } = record;
+      const { name, args } = record;
+      elemBox = { x1: Infinity, y1: Infinity, x2: -Infinity, y2: -Infinity };
+      let type = record.type;
+      // `Arrow` is Schemdraw's Line with arrow defaults (`double` → `<->`).
+      if (type === 'Arrow') {
+        const dbl = args.find(arg => arg.key === 'double');
+        if (!args.some(arg => arg.key === 'arrow')) {
+          args.push({ key: 'arrow', value: dbl && dbl.value === 'True' ? '<->' : '->' });
+        }
+        const kept = args.filter(arg => arg.key !== 'double');
+        args.length = 0;
+        args.push(...kept);
+        type = 'Line';
+      }
       if (type === '__hold_start') { heldStates.push([x, y, direction]); continue; }
       if (type === '__hold_end') { [x, y, direction] = heldStates.pop(); continue; }
       if (type === 'config') {
-        if (name || args.length !== 1 || args[0].key !== 'unit' || typeof args[0].value !== 'string' || !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(args[0].value)) throw new Error('対応形式: config: unit="2"');
-        const value = Number(args[0].value);
-        if (!Number.isFinite(value) || value <= 0 || !Number.isFinite(value * 36)) throw new Error('config の unit は有限の正の数を指定してください。');
-        unit = value * 36;
-        log(`config: unit=${value}`);
+        // Schemdraw's d.config(unit=..., fontsize=...). Several settings may be
+        // given in one line, each at most once.
+        if (name || !args.length) throw new Error('Expected format: config: unit="2" fontsize="12"');
+        const applied = [];
+        let seenUnit = false, seenFontsize = false, seenInches = false;
+        for (const arg of args) {
+          if (arg.key !== 'unit' && arg.key !== 'fontsize' && arg.key !== 'inches_per_unit') throw new Error(`Unsupported config setting: ${arg.key}`);
+          if (typeof arg.value !== 'string' || !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(arg.value)) throw new Error(`config ${arg.key} must be a number.`);
+          const value = Number(arg.value);
+          if (!Number.isFinite(value) || value <= 0 || !Number.isFinite(value * 36)) throw new Error(`config ${arg.key} must be a finite positive number.`);
+          if (arg.key === 'unit') {
+            if (seenUnit) throw new Error('Duplicate config setting: unit');
+            seenUnit = true;
+            unit = value * 36;
+          } else if (arg.key === 'fontsize') {
+            if (seenFontsize) throw new Error('Duplicate config setting: fontsize');
+            seenFontsize = true;
+            labelSize = value;
+            labelSizeSet = true;
+          } else {
+            if (seenInches) throw new Error('Duplicate config setting: inches_per_unit');
+            seenInches = true;
+            inchesPerUnit = value;
+          }
+          applied.push(`${arg.key}=${value}`);
+        }
+        log(`config: ${applied.join(' ')}`);
         continue;
       }
       if (type === 'print') {
-        if (name || args.length !== 1 || args[0].key !== 'value' || args[0].value !== 'd.here') throw new Error('対応形式: print: value="d.here"');
+        if (name || args.length !== 1 || args[0].key !== 'value' || args[0].value !== 'd.here') throw new Error('Expected format: print: value="d.here"');
         const clean = n => Math.abs(n) < 1e-12 ? 0 : Number(n.toPrecision(12));
         log(`d.here: (${clean(x / 36)}, ${clean(-y / 36)})`);
         continue;
       }
+      if (type === 'anchor') {
+        // Schemdraw's d.set_anchor(): name the current drawing position so a
+        // subcircuit instance can expose it as an anchor.
+        if (name || args.length !== 1 || args[0].key !== 'name' || typeof args[0].value !== 'string') throw new Error('Expected format: anchor: name="in"');
+        const anchorName = args[0].value;
+        if (!/^[A-Za-z_]\w*$/.test(anchorName)) throw new Error('anchor name must start with a letter or underscore.');
+        if (Object.prototype.hasOwnProperty.call(blockAnchors, anchorName)) throw new Error(`Duplicate anchor: ${anchorName}`);
+        blockAnchors[anchorName] = [x, y];
+        names[anchorName] = { start: [x, y], end: [x, y], center: [x, y], xy: [x, y] };
+        log(`anchor: ${anchorName} at (${x / 36}, ${-y / 36})`);
+        continue;
+      }
       if (type === 'move' || type === 'move_from') {
-        if (name) throw new Error(`${type} に部品名は付けられません。`);
+        if (name) throw new Error(`${type} cannot have a component name.`);
         const offsets = Object.create(null);
         for (const { key, value } of args) {
-          if (!['dx', 'dy'].includes(key) && !(type === 'move_from' && key === 'at')) throw new Error(`${type} の未対応の引数: ${key}`);
-          if (Object.prototype.hasOwnProperty.call(offsets, key)) throw new Error(`引数が重複しています: ${key}`);
+          if (!['dx', 'dy'].includes(key) && !(type === 'move_from' && key === 'at')) throw new Error(`Unsupported argument for ${type}: ${key}`);
+          if (Object.prototype.hasOwnProperty.call(offsets, key)) throw new Error(`Duplicate argument: ${key}`);
           if (key === 'at') {
-            if (typeof value !== 'string') throw new Error('move_from の at に端子を指定してください。');
+            if (typeof value !== 'string') throw new Error('move_from at must specify a terminal.');
             offsets[key] = value;
           } else offsets[key] = readMove(value, unit);
         }
         if (type === 'move_from') {
-          if (!Object.prototype.hasOwnProperty.call(offsets, 'at')) throw new Error('move_from に at を指定してください。');
+          if (!Object.prototype.hasOwnProperty.call(offsets, 'at')) throw new Error('move_from requires at.');
           [x, y] = point(offsets.at);
         }
         x += offsets.dx || 0;
@@ -250,40 +1807,1212 @@
         continue;
       }
       const previousState = [x, y, direction];
-      if (!['Resistor', 'Capacitor', 'Inductor', 'Diode', 'Zener', 'Line', 'Wire', 'Dot', 'Source', 'SourceSin', 'SourceV', 'Gap', 'Opamp', 'Ground', 'BjtNpn'].includes(type)) throw new Error(`未対応の部品: ${type}`);
-      const isSource = ['Source', 'SourceV', 'SourceSin'].includes(type);
-      if (name && Object.prototype.hasOwnProperty.call(names, name)) throw new Error(`部品名が重複しています: ${name}`);
+      if (!record.sub && !['Resistor', 'ResistorIEEE', 'ResistorIEC', 'ResistorVar', 'ResistorVarIEC', 'ResistorVarIEEE', 'Capacitor', 'Capacitor2', 'Inductor', 'Inductor2', 'CPE', 'Nullator', 'Norator', 'Diode', 'DiodeTunnel', 'DiodeTVS', 'DiodeShockley', 'Josephson', 'Zener', 'LED', 'Diac', 'Schottky', 'Varactor', 'Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE', 'Rshunt', 'SCR', 'Triac', 'Fuse', 'FuseIEC', 'FuseIEEE', 'RBox', 'Thermistor', 'Crystal', 'CapacitorVar', 'CapacitorTrim', 'Photoresistor', 'PhotoresistorBox', 'PhotoresistorIEC', 'PhotoresistorIEEE', 'Coax', 'Triax', 'Motor', 'BusLine', 'DataBusLine', 'BusConnect', 'CoaxConnect', 'Plug', 'Jack', 'Terminal', 'Jumper', 'DE9', 'DB25', 'DA15', 'DC37', 'DD50', 'Switch', 'Button', 'SwitchSpdt', 'SwitchSpdt2', 'SwitchDpst', 'SwitchDpdt', 'SwitchRotary', 'SwitchDIP', 'SwitchReed', 'Battery', 'BatteryCell', 'BatteryDouble', 'Line', 'Wire', 'Dot', 'Source', 'SourceSin', 'SourceV', 'SourceI', 'SourcePulse', 'SourceSquare', 'SourceTriangle', 'SourceRamp', 'Lamp', 'Lamp2', 'Solar', 'Neon', 'Photodiode', 'LED2', 'FuseUS', 'Memristor', 'Memristor2', 'SparkGap', 'MeterV', 'MeterA', 'MeterI', 'MeterOhm', 'MeterArrow', 'SourceControlled', 'SourceControlledV', 'SourceControlledI', 'Gap', 'Breaker', 'Optocoupler', 'Relay', 'Opamp', 'Ground', 'GroundSignal', 'GroundChassis', 'Vdd', 'Vss', 'NoConnect', 'Antenna', 'AntennaLoop', 'AntennaLoop2', 'Speaker', 'Mic', 'AudioJack', "OutletA","OutletB","OutletC","OutletD","OutletE","OutletF","OutletG","OutletH","OutletI","OutletJ","OutletK","OutletL", 'Arrowhead', 'DotDotDot', 'Label', 'Tag', 'Bjt', 'JFet', 'Hemt', 'NpnSchottky', 'PnpSchottky', 'BjtNpn', 'BjtPnp', 'BjtPnp2c', 'BjtNpn2', 'BjtPnp2', 'BjtPnp2c2', 'IgbtN', 'IgbtP', 'NpnPhoto', 'PnpPhoto', 'AnalogNFet', 'AnalogPFet', 'AnalogBiasedFet', 'NMos2', 'PMos2', 'NFet2', 'PFet2', 'JFetN2', 'JFetP2', 'JFetN', 'JFetP', 'NFet', 'PFet', 'NMos', 'PMos', 'CurrentMirror', 'VoltageMirror', 'Ic', 'Multiplexer', 'VoltageRegulator', 'DFlipFlop', 'JKFlipFlop', 'Ic555', 'SevenSegment', 'MeterBox', 'MeterAnalog', 'MeterDigital', 'Oscilloscope', 'IcDIP', 'Header', 'Transformer', 'LoopCurrent', 'CurrentLabel', 'Rectifier', ...logicGateTypes].includes(type)) throw new Error(`Unsupported component: ${type}`);
+      const isMeter = ['MeterBox', 'MeterAnalog', 'MeterDigital', 'Oscilloscope'].includes(type);
+      const isSource = ['Source', 'SourceV', 'SourceSin', 'SourceI', 'SourcePulse', 'SourceSquare', 'SourceTriangle', 'SourceRamp', 'Lamp', 'Lamp2', 'Solar', 'Neon', 'MeterV', 'MeterA', 'MeterI', 'MeterOhm', 'MeterArrow', 'SourceControlled', 'SourceControlledV', 'SourceControlledI', 'Solar', 'Neon'].includes(type);
+      if (name && Object.prototype.hasOwnProperty.call(names, name)) throw new Error(`Duplicate component name: ${name}`);
       const options = Object.create(null), labels = [];
       let selectedDirection = null, length = null;
       for (const { key, value } of args) {
         if (Object.prototype.hasOwnProperty.call(directions, key)) {
-          if (selectedDirection) throw new Error('方向を複数指定できません。');
+          if (selectedDirection) throw new Error('Only one direction may be specified.');
           selectedDirection = key;
           if (value !== undefined) length = readLength(value, unit);
         } else if (key === 'label') labels.push(readLabel(value));
-        else {
-          if (!['at', 'to', 'tox', 'toy', 'endpoints', 'anchor', 'theta', 'color', 'drop', 'shift', 'idot', 'dot', 'leads', 'lead', 'hold', 'flip', 'reverse', 'length', 'shape', 'k', 'arrow'].includes(key)) throw new Error(`未対応の引数: ${key}`);
-          if (Object.prototype.hasOwnProperty.call(options, key)) throw new Error(`引数が重複しています: ${key}`);
+        else if (key === 'pin') {
+          if (!options.pin) options.pin = [];
+          options.pin.push(value);
+        } else {
+          if (!record.sub && !['at', 'to', 'tox', 'toy', 'endpoints', 'anchor', 'theta', 'color', 'drop', 'shift', 'scale', 'tap_length', 'idot', 'dot', 'leads', 'lead', 'hold', 'flip', 'reverse', 'length', 'shape', 'k', 'arrow', 'size', 'pin', 'preclr', 'preclrinvert', 'slant', 'pinspacing', 'demux', 'decimal', 'digit', 'segcolor', 'tilt', 'labelsegments', 'anode', 'cathode', 'needle_percent', 'window_fill', 'input_fill', 'signal', 'signal_color', 'signal_lw', 'grid', ...(['IcDIP', 'Header', 'Transformer'].includes(type) ? ['pins', 'notch', 'width', 'pinw', 'spacing', 'number', 'pfontsize', 'rows', 'cols', 'style', 'numbering', 'shownumber', 'pinspacing', 'edge', 'pinfill', 't1', 't2', 'core', 'loop', 'align', 'pinsleft', 'pinsright', 'pinalignleft', 'pinalignright', 'pinfontsizeleft', 'pinfontsizeright'] : []), ...(['NFet2', 'PFet2', 'NFet', 'PFet'].includes(type) ? ['bulk'] : []), ...(['JFetN2', 'JFetP2'].includes(type) ? ['circle'] : []), ...(['AnalogNFet', 'AnalogPFet', 'AnalogBiasedFet'].includes(type) ? ['bulk', 'offset_gate', 'source_arrow'] : []), ...(type === 'Breaker' ? ['dots'] : []), ...(type === 'Optocoupler' ? ['box', 'boxfill', 'boxpad', 'base'] : []), ...(type === 'Relay' ? ['switch', 'core', 'link', 'box', 'boxfill', 'boxpad', 'swreverse', 'swflip', 'unit', 'cycl'] : []), ...(type === 'Inductor2' ? ['loops', 'core'] : []), ...(type === 'Capacitor2' ? ['polar'] : []), ...(type === 'Josephson' ? ['box'] : []), ...(type === 'Coax' ? ['radius', 'leadlen'] : []), ...(type === 'BusLine' ? ['lw'] : []), ...(type === 'BusConnect' ? ['n', 'slant_up', 'dy', 'lwbus', 'l'] : []), ...(type === 'CoaxConnect' ? ['radius', 'radiusinner', 'fillinner'] : []), ...(type === 'Terminal' ? ['r', 'open'] : []), ...(type === 'Jumper' ? ['pinspacing'] : []), ...(['DE9', 'DB25', 'DA15', 'DC37', 'DD50'].includes(type) ? ['pinspacing', 'edge', 'number', 'pinfill'] : []), ...(['MeterBox', 'MeterAnalog', 'MeterDigital', 'Oscilloscope'].includes(type) ? ['width', 'corner', 'inputs', 'input_ofst', 'input_lw', 'input_rad'] : []), ...(type === 'MeterAnalog' ? ['needle_color', 'needle_width'] : []), ...(['MeterDigital', 'Oscilloscope'].includes(type) ? ['screen_fill', 'screen_lw'] : []), ...(type === 'Oscilloscope' ? ['grid_color', 'grid_lw'] : []), ...(logicMultiInputTypes.has(type) ? ['inputs', 'inputnots', 'leadin', 'leadout'] : []), ...(type === 'Tristate' ? ['outputnot', 'controlnot'] : []), ...(type === 'Capacitor' ? ['polar'] : []), ...(type === 'Inductor' ? ['core'] : []), ...(['Diode', 'LED'].includes(type) ? ['fill'] : []), ...(type === 'Dot' ? ['open'] : []), ...(type === 'Opamp' ? ['sign'] : []), ...(type === 'Button' ? ['nc', 'contacts'] : []), ...(['NMos', 'PMos', 'NMos2', 'PMos2'].includes(type) ? ['diode'] : []), ...(['NFet', 'PFet'].includes(type) ? ['bulk'] : []), ...(['Switch', 'SwitchSpdt', 'SwitchSpdt2'].includes(type) ? ['contacts', 'nc', 'action'] : []), ...(type === 'SwitchRotary' ? ['n', 'dtheta', 'theta0', 'radius', 'arrowlen', 'arrowcontact'] : []), ...(type === 'SwitchDIP' ? ['n', 'pattern', 'switchcolor', 'swidth', 'spacing'] : []), ...(['SwitchDpst', 'SwitchDpdt'].includes(type) ? ['contacts', 'link'] : []), ...(['Bjt', 'JFet', 'NpnSchottky', 'PnpSchottky', 'BjtNpn', 'BjtPnp', 'BjtPnp2c', 'JFetN', 'JFetP', 'NMos', 'PMos', 'NMos2', 'PMos2'].includes(type) ? ['circle'] : []), ...(type === 'Hemt' ? ['split', 'source_arrow'] : []), ...(type === 'AudioJack' ? ['ring', 'switch', 'ringswitch', 'dots', 'open', 'radius'] : []), ...(/^Outlet[A-L]$/.test(type) ? ['plug'] : []), ...(type === 'Arrowhead' ? ['headwidth', 'headlength'] : []), ...(type === 'DotDotDot' ? ['radius', 'open'] : []), ...(type === 'Tag' ? ['width', 'height'] : []), ...(type === 'Arrow' ? ['double'] : []), ...(type === 'LoopCurrent' ? ['elms', 'pad', 'direction', 'theta1', 'theta2'] : []), ...(type === 'CurrentLabel' ? ['top', 'ofst', 'headlength', 'headwidth'] : [])].includes(key)) throw new Error(`Unsupported argument: ${key}`);
+          if (Object.prototype.hasOwnProperty.call(options, key)) throw new Error(`Duplicate argument: ${key}`);
           options[key] = value === undefined ? true : value;
         }
       }
-      for (const key of ['idot', 'dot', 'hold', 'flip', 'reverse']) if (key in options && options[key] !== true) throw new Error(`${key} は引数なしで指定してください。`);
-      for (const key of ['at', 'to', 'tox', 'toy']) if (key in options && typeof options[key] !== 'string') throw new Error(`${key} に端子を指定してください。`);
-      if ('endpoints' in options && typeof options.endpoints !== 'string') throw new Error('endpoints に始点と終点を指定してください。');
-      if ('endpoints' in options && ['at', 'to', 'tox', 'toy'].some(key => key in options)) throw new Error('endpoints と at・to・tox・toy は同時に指定できません。');
+      for (const key of ['hold', 'flip', 'reverse']) if (key in options && options[key] !== true) throw new Error(`${key} must be specified without a value.`);
+      // Schemdraw's dot(open=True) / idot(open=True) draw a hollow circle.
+      for (const key of ['idot', 'dot']) if (key in options && options[key] !== true && options[key] !== 'open') throw new Error(`${key} must be specified without a value, or as ${key}="open".`);
+      for (const key of ['contacts', 'nc', 'link']) if (options[key] === true) throw new Error(`${key} must be True or False.`);
+      for (const key of ['at', 'to', 'tox', 'toy']) if (key in options && typeof options[key] !== 'string') throw new Error(`${key} must specify a terminal.`);
+      if ('endpoints' in options && typeof options.endpoints !== 'string') throw new Error('endpoints must specify a start and end reference.');
+      if ('endpoints' in options && ['at', 'to', 'tox', 'toy'].some(key => key in options)) throw new Error('endpoints cannot be combined with at, to, tox, or toy.');
       const color = 'color' in options ? readColor(options.color) : 'black';
       const stroke = `fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"`;
       const textFill = 'color' in options ? ` fill="${color}"` : '';
-      if (type !== 'Wire' && (['shape', 'k'].some(key => key in options) || (type !== 'Line' && 'arrow' in options))) throw new Error(`${type} では Wire の引数を使用できません。`);
-      if (type === 'Line' && 'arrow' in options && !['->', '<-', '<->', '|->', '|-o'].includes(options.arrow)) throw new Error('Line の arrow が不正です。');
+      if (record.sub) {
+        // Schemdraw's ElementDrawing: replay the stored drawing at the current
+        // position. The body keeps its own unit and font size, the cursor ends
+        // at the subdrawing's final position, and the direction resets to right.
+        const def = subs[type];
+        const placement = ['at', 'anchor', 'theta'];
+        const provided = Object.create(null);
+        for (const key of Object.keys(options)) {
+          if (placement.includes(key)) continue;
+          if (!def.params.includes(key)) throw new Error(`Unknown subcircuit argument for ${type}: ${key}`);
+          if (typeof options[key] !== 'string') throw new Error(`Subcircuit parameter ${key} requires a value.`);
+          provided[key] = options[key];
+        }
+        const missing = def.params.filter(key => !Object.prototype.hasOwnProperty.call(provided, key));
+        if (missing.length) throw new Error(`Subcircuit ${type} requires parameters: ${missing.join(', ')}`);
+        if (selectedDirection || length !== null) throw new Error(`Subcircuit ${type} supports at, anchor, theta, and its parameters.`);
+        if (depth > 8) throw new Error('Subcircuits are nested too deeply.');
+        let body = def.source;
+        for (const [key, value] of Object.entries(provided)) body = body.split('${' + key + '}').join(value);
+        const leftover = /\$\{([A-Za-z_]\w*)\}/.exec(body);
+        if (leftover) throw new Error(`Unknown subcircuit parameter: ${leftover[1]}`);
+        const inner = parse(body, subs);
+        const local = renderRecords(inner, log, subs, depth + 1);
+        if (!Number.isFinite(local.minX)) throw new Error(`Subcircuit ${type} draws nothing.`);
+        let theta = 0;
+        if ('theta' in options) {
+          if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta must be a finite number.');
+          theta = Number(options.theta);
+        }
+        const origin = 'at' in options ? atPoint(options.at) : [x, y];
+        let shift = [0, 0];
+        if ('anchor' in options) {
+          const target = local.names[options.anchor];
+          if (!target || !target.center) throw new Error(`Unknown subcircuit anchor: ${options.anchor}`);
+          shift = target.center;
+        }
+        const rad = -theta * Math.PI / 180, cos = Math.cos(rad), sin = Math.sin(rad);
+        const tf = ([px, py]) => {
+          const qx = px - shift[0], qy = py - shift[1];
+          return [origin[0] + qx * cos - qy * sin, origin[1] + qx * sin + qy * cos];
+        };
+        const transform = `translate(${origin[0]} ${origin[1]})`
+          + (theta ? ` rotate(${-theta})` : '')
+          + (shift[0] || shift[1] ? ` translate(${-shift[0]} ${-shift[1]})` : '');
+        elements.push(`<g transform="${transform}">${local.elements.join('')}</g>`);
+        for (const corner of [[local.minX, local.minY], [local.minX, local.maxY], [local.maxX, local.minY], [local.maxX, local.maxY]]) {
+          const [bx, by] = tf(corner);
+          bounds(bx, by, bx, by);
+        }
+        if (name) {
+          // Anchors defined with `anchor:` come first (Schemdraw's drawing
+          // anchors); named parts are also exposed as single points.
+          const out = Object.create(null);
+          for (const [key, point] of Object.entries(local.blockAnchors)) out[key] = tf(point);
+          for (const [key, anchorSet] of Object.entries(local.names)) {
+            if (!Object.prototype.hasOwnProperty.call(out, key) && anchorSet && Array.isArray(anchorSet.center)) out[key] = tf(anchorSet.center);
+          }
+          names[name] = out;
+        }
+        [x, y] = tf([local.x, local.y]);
+        direction = 'right';
+        log(`Subcircuit ${type}: ${'at' in options ? 'at=' + options.at : 'sequential'}`);
+        continue;
+      }
+      if (!isMeter && (labels.some(label => label.fontsize !== undefined || label.color !== undefined || (!logicGateTypes.has(type) && ['name', 'in1', 'in2', 'display'].includes(label.loc))) || ['needle_percent', 'window_fill', 'input_fill', 'signal', 'signal_color', 'signal_lw', 'grid'].some(key => key in options))) throw new Error(`The specified arguments are not supported for ${type}.`);
+      if (type !== 'Wire' && (['shape', 'k'].some(key => key in options) || (type !== 'Line' && 'arrow' in options))) throw new Error(`Wire arguments cannot be used with ${type}.`);
+      if (type === 'Line' && 'arrow' in options && !['->', '<-', '<->', '|->', '|-o'].includes(options.arrow)) throw new Error('Invalid Line arrow.');
+      if (type === 'Rectifier') {
+        // Schemdraw's Rectifier: four diodes forming a bridge, with N/S/E/W
+        // anchors. It is a compound element, so it does not move the cursor.
+        if (selectedDirection || length !== null || Object.keys(options).some(key => !['at', 'anchor', 'theta', 'color', 'fill'].includes(key))) throw new Error('Rectifier supports at, anchor, theta, color, and fill.');
+        if ('at' in options) [x, y] = atPoint(options.at);
+        let theta = 0;
+        if ('theta' in options) {
+          if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta must be a finite number.');
+          theta = Number(options.theta);
+        }
+        const c = 76.36753236814713, full = 2 * 76.36753236814713;
+        const local = { W: [0, 0], N: [c, -c], E: [full, 0], S: [c, c] };
+        const paths = [
+          `M 0,0 L ${c - 42.639},${-(c - 42.639)} M 36.275,-49.002 L 49.002,-36.275 M 42.639,-42.639 L ${c},${-c}`,
+          `M ${c},${-c} L 110.097,-42.639 M 125.37,-40.093 L 112.642,-27.365 M 119.006,-33.729 L ${full},0`,
+          `M ${full},0 L 119.006,33.729 M 112.642,27.365 L 125.37,40.093 M 110.097,42.639 L ${c},${c}`,
+          `M ${c},${c} L 42.639,42.639 M 49.002,36.275 L 36.275,49.002 M 33.729,33.729 L 0,0`
+        ];
+        const triangles = [
+          '27.365,-40.093 42.639,-42.639 40.093,-27.365',
+          '116.46,-49.002 119.006,-33.729 103.733,-36.275',
+          '103.733,36.275 119.006,33.729 116.46,49.002',
+          '40.093,27.365 42.639,42.639 27.365,40.093'
+        ];
+        const rad = -theta * Math.PI / 180, cos = Math.cos(rad), sin = Math.sin(rad);
+        const tf = ([px, py]) => [x + px * cos - py * sin, y + px * sin + py * cos];
+        let body = '';
+        for (const d of paths) {
+          // Rotate the fixed paths by baking them into a group instead.
+          body += `<path d="${d}" ${stroke}/>`;
+        }
+        for (const points of triangles) {
+          body += `<polygon points="${points}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>`;
+        }
+        elements.push(`<g transform="translate(${x} ${y}) rotate(${-theta})">${body}</g>`);
+        const anchors = Object.create(null);
+        for (const [key, point] of Object.entries(local)) anchors[key] = tf(point);
+        for (const corner of [[0, 0], [c, -c], [full, 0], [c, c]]) {
+          const [bx, by] = tf(corner);
+          bounds(bx - 4, by - 4, bx + 4, by + 4);
+        }
+        if (name) {
+          names[name] = anchors;
+          namedBoxes[name] = { ...elemBox };
+        }
+        log(`Rectifier: at (${x / 36}, ${-y / 36})`);
+        continue;
+      }
+      if (type === 'CurrentLabel') {
+        // Schemdraw's CurrentLabel: a short arrow drawn parallel to an existing
+        // element, offset to one side, with the label outside the arrow.
+        const allowed = ['at', 'color', 'top', 'ofst', 'length', 'reverse', 'headlength', 'headwidth'];
+        if (selectedDirection || Object.keys(options).some(key => !allowed.includes(key))) throw new Error('CurrentLabel supports at, top, ofst, length, reverse, headlength, headwidth, color, and labels.');
+        if (!('at' in options)) throw new Error('CurrentLabel requires at=<element>.');
+        const ref = String(options.at);
+        let cx0, cy0, dir = [1, 0];
+        if (Object.prototype.hasOwnProperty.call(names, ref)) {
+          [cx0, cy0] = names[ref].center;
+          dir = namedDirs[ref] || [1, 0];
+        } else if (/^\(/.test(ref)) {
+          [cx0, cy0] = atPoint(ref);
+        } else throw new Error(`CurrentLabel at must name an element: ${ref}`);
+        const number = (key, fallback) => {
+          if (!(key in options)) return fallback;
+          if (typeof options[key] !== 'string' || !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(options[key]) || !(Number(options[key]) >= 0)) throw new Error(`CurrentLabel ${key} must be a positive number.`);
+          return Number(options[key]) * 36;
+        };
+        const len = number('length', 2 * 36);
+        const ofst = number('ofst', 0.15 * 36);
+        const headLen = number('headlength', 0.3 * 36);
+        const headW = number('headwidth', 0.2 * 36);
+        let onTop = true;
+        if ('top' in options) {
+          if (!['True', 'False'].includes(options.top)) throw new Error('CurrentLabel top must be True or False.');
+          onTop = options.top === 'True';
+        }
+        let reverse = 'reverse' in options;
+        // Schemdraw keeps a per-element hint (`ilabel`) saying which side the
+        // current arrow belongs on. `reverse` on the element mirrors it.
+        const ilabel = {
+          AnalogNFet: 'left', AnalogPFet: 'left', AnalogBiasedFet: 'left',
+          NFet: 'left', PFet: 'left', JFet: 'left', Hemt: 'left',
+          NMos: 'right', PMos: 'right', Bjt: 'right',
+          NFet2: 'bottom', PFet2: 'bottom', JFet2: 'bottom', Bjt2: 'bottom'
+        }[namedTypes[ref] || ''] || 'top';
+        const flipSide = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' };
+        let side = ilabel;
+        // A reversed element mirrors the arrow to the other side.
+        if (namedReversed[ref] && (side === 'left' || side === 'right')) side = flipSide[side];
+        if (!onTop && (side === 'top' || side === 'bottom')) side = flipSide[side];
+        let ox, oy, ax, ay, bx, by, labelAxis = null;
+        if (side === 'left' || side === 'right') {
+          // Vertical arrow beside the element, as wide as its channel.
+          const box = namedBoxes[ref];
+          const anchorX = names[ref].drain ? names[ref].drain[0] : cx0;
+          ox = anchorX + (side === 'right' ? ofst : -ofst);
+          oy = box && Number.isFinite(box.y1) ? (box.y1 + box.y2) / 2 : cy0;
+          ax = ox; ay = oy - len / 2;
+          bx = ox; by = oy + len / 2;
+        } else {
+          const px = -dir[1], py = dir[0];
+          const sign = side === 'top' ? -1 : 1;
+          // Offset from the element's edge, not its centreline (Schemdraw bbox).
+          const [aboveEdge, belowEdge] = sideExtent(namedTypes[ref] || '');
+          const edge = side === 'top' ? aboveEdge : belowEdge;
+          const total = edge + ofst;
+          ox = cx0 + px * sign * total; oy = cy0 + py * sign * total;
+          ax = ox - dir[0] * len / 2; ay = oy - dir[1] * len / 2;
+          bx = ox + dir[0] * len / 2; by = oy + dir[1] * len / 2;
+          labelAxis = { px, py, sign, total };
+        }
+        const [sx, sy, ex, ey] = reverse ? [bx, by, ax, ay] : [ax, ay, bx, by];
+        // Schemdraw shortens the line by the arrow length before drawing the head.
+        const ux0 = (ex - sx) / (len || 1), uy0 = (ey - sy) / (len || 1);
+        elements.push(`<path d="M ${sx.toFixed(3)},${sy.toFixed(3)} L ${(ex - ux0 * headLen).toFixed(3)},${(ey - uy0 * headLen).toFixed(3)}" ${stroke}/>`);
+        const ux = (ex - sx) / (len || 1), uy = (ey - sy) / (len || 1);
+        // Schemdraw's arrow(): the tip sits 2px short of the line end and the
+        // base is one arrowlength back from the end.
+        const tipX = ex - ux * 2, tipY = ey - uy * 2;
+        const hx = ex - ux * headLen, hy = ey - uy * headLen;
+        elements.push(`<path d="M ${tipX.toFixed(3)},${tipY.toFixed(3)} L ${(hx - uy * headW / 2).toFixed(3)},${(hy + ux * headW / 2).toFixed(3)} L ${(hx + uy * headW / 2).toFixed(3)},${(hy - ux * headW / 2).toFixed(3)} Z" fill="${color}" stroke="${color}"/>`);
+        bounds(Math.min(ax, bx) - 6, Math.min(ay, by) - 6, Math.max(ax, bx) + 6, Math.max(ay, by) + 6);
+        for (const label of labels) {
+          if (label.items || label.halign != null || label.ofst != null || label.rotate !== undefined) throw new Error('CurrentLabel does not support label arguments.');
+          const size = label.fontsize === undefined ? labelSize : label.fontsize;
+          // Schemdraw puts the label just past the arrow's bbox edge (0.1 unit).
+          let lx, ly, anchorText = 'middle', baseline = '';
+          if (labelAxis) {
+            const { px, py, sign, total } = labelAxis;
+            const gap = total + 3.6;
+            lx = cx0 + px * sign * gap; ly = cy0 + py * sign * gap;
+            baseline = sign > 0 ? ' dominant-baseline="hanging"' : '';
+          } else {
+            const gap = ofst + 3.6;
+            lx = ox + (side === 'right' ? gap : -gap);
+            ly = oy;
+            anchorText = side === 'right' ? 'start' : 'end';
+            baseline = ' dominant-baseline="central"';
+          }
+          elements.push(`<text x="${lx.toFixed(3)}" y="${ly.toFixed(3)}" text-anchor="${anchorText}"${baseline}${textFill} font-family="sans-serif" font-size="${size}">${labelContent(label.text)}</text>`);
+          const width = Math.max(size, Array.from(label.text).length * size * 0.71);
+          bounds(lx - width, ly - size, lx + width, ly + size);
+        }
+        log(`CurrentLabel: at=${ref}`);
+        continue;
+      }
+      if (type === 'LoopCurrent') {
+        // Schemdraw's LoopCurrent: take four elements (top, right, bottom, left)
+        // and draw an elliptical loop arrow inside their bounding box, inset by
+        // `pad`, with the label at the loop centre.
+        if (selectedDirection || length !== null || ['at', 'to', 'tox', 'toy', 'endpoints', 'anchor', 'theta', 'shift', 'drop', 'hold', 'flip', 'reverse'].some(key => key in options)) throw new Error('LoopCurrent supports elms, pad, direction, theta1, theta2, color, and labels.');
+        const match = /^\[\s*([^\]]*)\]\s*$/.exec(options.elms === undefined ? '' : String(options.elms));
+        if (!match) throw new Error('LoopCurrent requires elms=[top right bottom left].');
+        const refs = match[1].split(/[\s,]+/).filter(Boolean);
+        if (refs.length !== 4) throw new Error('LoopCurrent requires exactly four element names.');
+        const unknown = refs.find(ref => !Object.prototype.hasOwnProperty.call(namedTypes, ref));
+        if (unknown !== undefined) throw new Error(`Unknown element in LoopCurrent: ${unknown}`);
+        const halves = refs.map(ref => loopHalfExtent(namedTypes[ref]));
+        const axis = ref => {
+          const [sx, sy] = names[ref].start, [ex, ey] = names[ref].end;
+          return [(sx + ex) / 2, (sy + ey) / 2];
+        };
+        let padPx = 0.2 * 36;
+        if ('pad' in options) {
+          if (typeof options.pad !== 'string' || !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.pad)) throw new Error('LoopCurrent pad must be a number.');
+          padPx = Number(options.pad) * 36;
+          if (!Number.isFinite(padPx)) throw new Error('LoopCurrent pad is too large.');
+        }
+        const [topX, topY] = axis(refs[0]), [rightX] = axis(refs[1]);
+        const [, bottomY] = axis(refs[2]), [leftX] = axis(refs[3]);
+        const top = topY + halves[0] + padPx, bottom = bottomY - halves[2] - padPx;
+        const left = leftX + halves[3] + padPx, right = rightX - halves[1] - padPx;
+        if (!(right > left) || !(bottom > top)) throw new Error('LoopCurrent loop has no area.');
+        const cx = (left + right) / 2, cy = (top + bottom) / 2;
+        const rx = (right - left) / 2, ry = (bottom - top) / 2;
+        let theta1 = 35, theta2 = -35;
+        for (const key of ['theta1', 'theta2']) {
+          if (!(key in options)) continue;
+          if (typeof options[key] !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options[key]) || !Number.isFinite(Number(options[key]))) throw new Error(`LoopCurrent ${key} must be a finite number.`);
+          if (key === 'theta1') theta1 = Number(options.theta1); else theta2 = Number(options.theta2);
+        }
+        const cw = options.direction === undefined || options.direction === 'cw';
+        if (options.direction !== undefined && !['cw', 'ccw'].includes(options.direction)) throw new Error('LoopCurrent direction must be cw or ccw.');
+        // The backend turns the requested angle into the ellipse's parametric angle.
+        const parametric = deg => Math.atan2(rx * Math.sin(deg * Math.PI / 180), ry * Math.cos(deg * Math.PI / 180));
+        const t1 = parametric(theta1), t2 = parametric(theta2);
+        const startT = cw ? t1 : t2, endT = cw ? t2 + 2 * Math.PI : t1 - 2 * Math.PI;
+        const steps = 72, pts = [];
+        for (let i = 0; i <= steps; i++) {
+          const t = startT + (endT - startT) * i / steps;
+          pts.push([cx + rx * Math.cos(t), cy + ry * Math.sin(t)]);
+        }
+        const d = pts.map(([px, py], i) => `${i ? 'L' : 'M'} ${px.toFixed(3)},${py.toFixed(3)}`).join(' ');
+        elements.push(`<path d="${d}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round"/>`);
+        // Arrowhead at the end, pointing along the last segment.
+        const [ex, ey] = pts[pts.length - 1], [px, py] = pts[pts.length - 2];
+        const len = Math.hypot(ex - px, ey - py) || 1;
+        const ux = (ex - px) / len, uy = (ey - py) / len;
+        const backX = ex - 9 * ux, backY = ey - 9 * uy;
+        elements.push(`<path d="M ${ex.toFixed(3)},${ey.toFixed(3)} L ${(backX - 2.7 * uy).toFixed(3)},${(backY + 2.7 * ux).toFixed(3)} L ${(backX + 2.7 * uy).toFixed(3)},${(backY - 2.7 * ux).toFixed(3)} Z" fill="${color}" stroke="${color}"/>`);
+        bounds(cx - rx - 4, cy - ry - 4, cx + rx + 4, cy + ry + 4);
+        for (const label of labels) {
+          if (label.items || label.halign != null || label.ofst != null || label.rotate !== undefined) throw new Error('LoopCurrent does not support label arguments.');
+          const size = label.fontsize === undefined ? labelSize : label.fontsize;
+          elements.push(`<text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central"${label.color ? ` fill="${label.color}"` : textFill} font-family="sans-serif" font-size="${size}">${labelContent(label.text)}</text>`);
+          const width = Math.max(size, Array.from(label.text).length * size * 0.71);
+          bounds(cx - width, cy - size, cx + width, cy + size);
+        }
+        log(`LoopCurrent: ${refs.join(', ')}`);
+        continue;
+      }
+      if (type === 'SevenSegment') {
+        const allowedSS = ['at', 'anchor', 'drop', 'theta', 'color', 'decimal', 'digit', 'segcolor', 'tilt', 'labelsegments', 'anode', 'cathode'];
+        if (labels.some(label => label.items || label.halign != null || label.ofst != null || label.rotate !== undefined) || Object.keys(options).some(key => !allowedSS.includes(key))) throw new Error('SevenSegment supports decimal, digit, segcolor, tilt, labelsegments, anode, cathode, at, anchor, drop, theta, color, and labels.');
+        const bool = (key, fallback) => {
+          if (!(key in options)) return fallback;
+          if (!['True', 'False'].includes(options[key])) throw new Error(`${key} must be True or False.`);
+          return options[key] === 'True';
+        };
+        const decimal = bool('decimal', false), anode = bool('anode', false), cathode = bool('cathode', false), labelsegments = bool('labelsegments', true);
+        const digit = options.digit === undefined ? '8' : String(options.digit);
+        if (Array.from(digit).length !== 1) throw new Error('digit must be a single character.');
+        const segcolor = options.segcolor === undefined ? 'red' : readColor(options.segcolor);
+        let tilt = 10;
+        if ('tilt' in options) {
+          if (typeof options.tilt !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.tilt) || !Number.isFinite(Number(options.tilt))) throw new Error('tilt must be a finite number.');
+          tilt = Number(options.tilt);
+        }
+        if ('at' in options) [x, y] = atPoint(options.at);
+        const W = 108, HH = (decimal ? 5.9 : 5.3) * 36;
+        const slots = decimal ? 8 : 7;
+        const pins = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((n, i) => ({ side: 'L', num: n, anchor: n, slot: `${slots - i}/${slots}` }));
+        if (decimal) pins.push({ side: 'L', num: 'dp', anchor: 'dp', slot: `1/${slots}` });
+        if (anode) pins.push({ side: 'T', num: 'ca', anchor: 'anode' });
+        if (cathode) pins.push({ side: 'B', num: 'cc', anchor: 'cathode' });
+        const anchors = { center: [W / 2, -HH / 2], xy: [0, 0] };
+        let leads = '', texts = '';
+        for (const side of ['L', 'R', 'T', 'B']) {
+          const list = pins.filter(p => p.side === side);
+          const len = side === 'L' || side === 'R' ? HH : W;
+          const count = list.length;
+          const step = 0.6 * 36;
+          const pad = count > 1 ? (len - step * (count - 1)) / 2 : len / 2;
+          list.forEach((pin, i) => {
+            const idx = pin.slot ? Number(pin.slot.split('/')[0]) - 1 : (count > 1 ? i : 0);
+            const z = count > 1 ? pad + idx * step : len / 2;
+            const p = side === 'L' ? [0, -z] : side === 'R' ? [W, -z] : side === 'T' ? [z, -HH] : [z, 0];
+            const end = side === 'L' ? [p[0] - 18, p[1]] : side === 'R' ? [p[0] + 18, p[1]] : side === 'T' ? [p[0], p[1] - 18] : [p[0], p[1] + 18];
+            leads += `M ${p[0]},${p[1]} L ${end[0]},${end[1]} `;
+            if (side === 'L') texts += `<text x="-2.7" y="${-z - 2.7}" text-anchor="end"${textFill} font-family="sans-serif" font-size="11">${pin.num}</text>`;
+            else if (side === 'R') texts += `<text x="${W + 2.7}" y="${-z - 2.7}" text-anchor="start"${textFill} font-family="sans-serif" font-size="11">${pin.num}</text>`;
+            else if (side === 'T') texts += `<text x="${z + 2.7}" y="${-HH - 2.7}" text-anchor="start"${textFill} font-family="sans-serif" font-size="11">${pin.num}</text>`;
+            else texts += `<text x="${z + 2.7}" y="2.7" text-anchor="start" dominant-baseline="hanging"${textFill} font-family="sans-serif" font-size="11">${pin.num}</text>`;
+            anchors[pin.anchor] = end;
+            anchors[`pin${pin.num}`] = end;
+            anchors[`in${side}${i + 1}`] = end;
+          });
+        }
+        // Digit segment geometry, matching Schemdraw's sevensegdigit().
+        const seglen = 1.5, segw = .3, spacing2 = .12, halfw = segw / 2, marginy = segw / 5, halfspace = spacing2 / 2;
+        const boxh = decimal ? 5.9 : 5.3;
+        const lam = Math.sin(tilt * Math.PI / 180);
+        const left = .8 - lam * seglen, bottom = (boxh - seglen * 2) / 2;
+        const baseDx = [halfspace, halfspace + halfw, seglen - halfspace - halfw, seglen - halfspace, seglen - halfspace - halfw, halfspace + halfw];
+        const baseDy = [0, halfw, halfw, 0, -halfw, -halfw];
+        const shift = (xs, ys) => xs.map((v, i) => [v + lam * ys[i] + left, ys[i] + bottom]);
+        const segA = shift(baseDx, baseDy.map(v => v + seglen * 2));
+        const segD = shift(baseDx, baseDy);
+        const segG = shift(baseDx, baseDy.map(v => v + seglen));
+        const vertx = [0, halfw, halfw, 0, -halfw, -halfw];
+        const verty = [halfspace, halfspace + halfw, seglen - halfspace - halfw, seglen - halfspace, seglen - halfspace - halfw, halfspace + halfw];
+        const segE = shift(vertx, verty);
+        const segF = shift(vertx, verty.map(v => v + seglen));
+        const segB = shift(vertx.map(v => v + seglen), verty.map(v => v + seglen));
+        const segC = shift(vertx.map(v => v + seglen), verty);
+        const fills = {
+          a: '23567890acef'.includes(digit.toLowerCase()),
+          b: '12347890ad'.includes(digit.toLowerCase()),
+          c: '13456789 0abd'.replace(' ', '').includes(digit.toLowerCase()),
+          d: '2356890bcde'.includes(digit.toLowerCase()),
+          e: '2680abcdef'.includes(digit.toLowerCase()),
+          f: '456890abcef'.includes(digit.toLowerCase()),
+          g: '2345689abdef'.includes(digit.toLowerCase())
+        };
+        const poly = (pts, name) => {
+          const points = pts.map(([px, py]) => `${(px * 36).toFixed(3)},${(-py * 36).toFixed(3)}`).join(' ');
+          return `<polygon points="${points}" fill="${fills[name] ? segcolor : 'none'}" stroke="gray" stroke-width="0.5"/>`;
+        };
+        let glyph = poly(segA, 'a') + poly(segB, 'b') + poly(segC, 'c') + poly(segD, 'd') + poly(segE, 'e') + poly(segF, 'f') + poly(segG, 'g');
+        if (decimal) glyph += `<circle cx="${(left + seglen + segw + .075) * 36}" cy="${-bottom * 36}" r="5.4" fill="${segcolor}" stroke="gray" stroke-width="0.5"/>`;
+        if (labelsegments) {
+          const labels = {
+            a: [seglen / 2 + halfspace, seglen * 2 + halfw + marginy, 'middle', ''],
+            g: [seglen / 2 + halfspace, seglen + halfw + marginy, 'middle', ''],
+            d: [seglen / 2 + halfspace, halfw + marginy, 'middle', ''],
+            b: [seglen + halfw + halfspace, seglen * 1.5, 'start', ' dominant-baseline="central"'],
+            c: [seglen + halfw + halfspace, seglen * .5, 'start', ' dominant-baseline="central"'],
+            e: [-halfw - halfspace, seglen * .5, 'end', ' dominant-baseline="central"'],
+            f: [-halfw - halfspace, seglen * 1.5, 'end', ' dominant-baseline="central"']
+          };
+          for (const [ch, [sx2, sy2, anchor2, base2]] of Object.entries(labels)) {
+            const tx = (sx2 + lam * sy2 + left) * 36, ty = -(sy2 + bottom) * 36;
+            glyph += `<text x="${tx}" y="${ty}" text-anchor="${anchor2}"${base2}${textFill} font-family="sans-serif" font-size="10">${ch}</text>`;
+          }
+        }
+        const radians = typeof direction === 'number' ? direction * Math.PI / 180 : 0;
+        if ('theta' in options) {
+          if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta must be a finite number.');
+          const degs = ((Number(options.theta) % 360) + 360) % 360;
+          direction = ({ 0: 'right', 90: 'up', 180: 'left', 270: 'down' })[degs] || Number(options.theta);
+        } else if (selectedDirection) direction = selectedDirection;
+        const rad2 = typeof direction === 'number' ? direction * Math.PI / 180 : 0;
+        const [dx2, dy2, angle2] = typeof direction === 'number' ? [Math.cos(rad2), -Math.sin(rad2), -direction] : directions[direction];
+        const placed = placeComponent({ anchors }, [x, y], { direction: [dx2, dy2], anchor: options.anchor === undefined ? null : options.anchor });
+        if ('drop' in options && !Object.prototype.hasOwnProperty.call(placed.anchors, options.drop)) throw new Error(`Unknown SevenSegment drop: ${options.drop}`);
+        // .anchor() moves the glyph so the named terminal sits at the insertion point.
+        const [bodyX, bodyY] = placed.transform(0, 0);
+        let body = `<path d="M 0,0 L ${W},0 L ${W},${-HH} L 0,${-HH} Z" ${stroke}/><path d="${leads}" ${stroke}/>${glyph}`;
+        for (const label of labels) body += `<text x="${W / 2}" y="${-HH / 2}" text-anchor="middle" dominant-baseline="central"${textFill} font-family="sans-serif" font-size="${labelSize}">${labelContent(label.text)}</text>`;
+        elements.push(`<g transform="translate(${bodyX} ${bodyY}) rotate(${angle2})">${body}${texts}</g>`);
+        for (const [lx, ly] of [[-20, -HH - 20], [W + 20, 20], [-20, 20], [W + 20, -HH - 20]]) {
+          const [bx2, by2] = placed.transform(lx, ly);
+          bounds(bx2, by2, bx2, by2);
+        }
+        if (name) names[name] = placed.anchors;
+        if ('drop' in options) [x, y] = placed.anchors[options.drop];
+        log(`SevenSegment: digit=${digit}`);
+        continue;
+      }
+      if (chipDefinitions[type]) {
+        const def = chipDefinitions[type];
+        const allowedChip = ['at', 'anchor', 'drop', 'theta', 'color', 'preclr', 'preclrinvert', 'size', 'flip', 'reverse'];
+        if (labels.some(label => label.items || label.halign != null || label.rotate !== undefined || ['name', 'in1', 'in2', 'display'].includes(label.loc)) || Object.keys(options).some(key => !allowedChip.includes(key))) throw new Error(`${type} supports at, anchor, drop, theta, color, preclr, preclrinvert, size, flip, reverse, and labels.`);
+        for (const key of ['preclr', 'preclrinvert', 'flip', 'reverse']) if (key in options && key !== 'preclr' && options[key] !== true) throw new Error(`${key} must be specified without a value.`);
+        if ('preclr' in options && !['True', 'False'].includes(options.preclr)) throw new Error('preclr must be True or False.');
+        if (('preclr' in options || 'preclrinvert' in options) && !def.preclr) throw new Error(`preclr and preclrinvert cannot be used with ${type}.`);
+        if ('preclrinvert' in options && !('preclr' in options && options.preclr === 'True')) throw new Error('preclrinvert requires preclr=True.');
+        const preclrInvert = 'preclrinvert' in options;
+        let width = def.w, height = def.h;
+        if ('size' in options) {
+          const sizeMatch = /^\(\s*(\d+(?:\.\d+)?|\.\d+)\s+(\d+(?:\.\d+)?|\.\d+)\s*\)$/.exec(typeof options.size === 'string' ? options.size : '');
+          if (!sizeMatch) throw new Error(`${type} size must be specified as size="(width height)".`);
+          width = Number(sizeMatch[1]); height = Number(sizeMatch[2]);
+          if (!(width > 0) || !(height > 0)) throw new Error(`${type} size must be positive.`);
+        }
+        const flip = 'flip' in options, reverse = 'reverse' in options;
+        if ('at' in options) [x, y] = atPoint(options.at);
+        const W = width * 36, HH = height * 36, leadLen = def.lead * 36;
+        const pins = def.pins.concat('preclr' in options && options.preclr === 'True' ? def.preclr : []);
+        const sides = { L: [], R: [], T: [], B: [] };
+        for (const pin of pins) sides[pin.side].push(pin);
+        const anchors = { center: [W / 2, -HH / 2], xy: [0, 0] };
+        let leads = '', shapes = '';
+        const pinTexts = [];
+        const addPinText = (side, pin, x, y, value, size, h, v, isNumber) => {
+          const item = { side, pin, x, y, value, size, h, v, isNumber };
+          pinTexts.push(item);
+          return item;
+        };
+        for (const side of ['L', 'R', 'T', 'B']) {
+          const list = sides[side];
+          const len = side === 'L' || side === 'R' ? HH : W;
+          const count = Math.max(list.length, 0, ...list.map(pin => pin.slot ? Number(pin.slot.split('/')[1]) : 1));
+          const sp = def.spacing !== undefined ? def.spacing * 36 : (count > 1 ? (len - 36) / (count - 1) : 0);
+          const pad = def.spacing !== undefined ? (len - sp * (count - 1)) / 2 : 18;
+          list.forEach((pin, i) => {
+            const idx = pin.slot ? Number(pin.slot.split('/')[0]) - 1 : (count > 1 ? i : 0);
+            const z = count > 1 ? pad + idx * sp : len / 2;
+            const p = side === 'L' ? [0, -z] : side === 'R' ? [W, -z] : side === 'T' ? [z, -HH] : [z, 0];
+            let leadStart = p;
+            const invert = pin.invert || (preclrInvert && pin.preclr);
+            if (invert) {
+              const sign = side === 'L' || side === 'T' ? -1 : 1;
+              const c = side === 'L' || side === 'R' ? [p[0] + sign * 5.4, p[1]] : [p[0], p[1] + sign * 5.4];
+              shapes += `<circle cx="${c[0]}" cy="${c[1]}" r="5.4" fill="none" stroke="${color}" stroke-width="2"/>`;
+              leadStart = side === 'L' || side === 'R' ? [c[0] + sign * 5.4, c[1]] : [c[0], c[1] + sign * 5.4];
+            }
+            const end = side === 'L' ? [p[0] - leadLen, p[1]] : side === 'R' ? [p[0] + leadLen, p[1]] : side === 'T' ? [p[0], p[1] - leadLen] : [p[0], p[1] + leadLen];
+            leads += `M ${leadStart[0]},${leadStart[1]} L ${end[0]},${end[1]} `;
+            if (pin.clock) {
+              leads += `M 0,${p[1] - 6.3} L 12.6,${p[1]} L 0,${p[1] + 6.3} `;
+              anchors.CLK = end;
+              anchors['>'] = end;
+            } else if (pin.name) {
+              const ofst = side === 'L' ? [5.4, 0] : side === 'R' ? [-5.4, 0] : side === 'T' ? [0, 5.4] : [0, -5.4];
+              const base = { L: ['left', 'center'], R: ['right', 'center'], T: ['center', 'top'], B: ['center', 'bottom'] }[side];
+              const nameText = addPinText(side, p, p[0] + ofst[0], p[1] + ofst[1], pin.name, 14, base[0], base[1], false);
+              if (pin.overline) nameText.overline = true;
+              anchors[pin.anchor || (pin.name === '>' ? 'CLK' : pin.name)] = end;
+            } else if (pin.anchor) anchors[pin.anchor] = end;
+            if (pin.num) {
+              const shift = invert ? 10.8 : 0;
+              const pofst = side === 'L' ? [-1.8 - shift, -1.8] : side === 'R' ? [1.8 + shift, -1.8] : side === 'T' ? [1.8, -1.8 - shift] : [1.8, 1.8 + shift];
+              const base = { L: ['right', 'bottom'], R: ['left', 'bottom'], T: ['left', 'bottom'], B: ['left', 'top'] }[side];
+              addPinText(side, p, p[0] + pofst[0], p[1] + pofst[1], pin.num, 11, base[0], base[1], true);
+            }
+            anchors[`in${side}${i + 1}`] = end;
+            if (pin.num) anchors[`pin${pin.num}`] = end;
+          });
+        }
+        // Pin texts stay upright. flip/reverse mirror their positions, and
+        // Schemdraw swaps the vertical/horizontal alignment on the affected
+        // sides. Numbers keep their offset from the pin on the flipped axis.
+        const mirrorH = h => ({ left: 'right', right: 'left' }[h] || h);
+        const mirrorV = v => ({ top: 'bottom', bottom: 'top' }[v] || v);
+        for (const item of pinTexts) {
+          if (flip) {
+            item.y = (item.isNumber && (item.side === 'L' || item.side === 'R')) ? item.y - 2 * item.pin[1] : -item.y;
+            if (item.side === 'T' || item.side === 'B') item.v = mirrorV(item.v);
+          }
+          if (reverse) {
+            item.x = (item.isNumber && (item.side === 'T' || item.side === 'B')) ? item.x + W - 2 * item.pin[0] : W - item.x;
+            if (item.side === 'L' || item.side === 'R') item.h = mirrorH(item.h);
+          }
+        }
+        // Local terminals follow the same reflection as the glyph.
+        for (const key of Object.keys(anchors)) {
+          if (key === 'xy') continue;
+          const [ax, ay] = anchors[key];
+          anchors[key] = [reverse ? W - ax : ax, flip ? -ay : ay];
+        }
+        if ('theta' in options) {
+          if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta must be a finite number.');
+          const degrees = ((Number(options.theta) % 360) + 360) % 360;
+          direction = ({ 0: 'right', 90: 'up', 180: 'left', 270: 'down' })[degrees] || Number(options.theta);
+        } else if (selectedDirection) direction = selectedDirection;
+        const radians = typeof direction === 'number' ? direction * Math.PI / 180 : 0;
+        const [dx2, dy2, angle2] = typeof direction === 'number' ? [Math.cos(radians), -Math.sin(radians), -direction] : directions[direction];
+        const placed = placeComponent({ anchors }, [x, y], { direction: [dx2, dy2], anchor: options.anchor === undefined ? null : options.anchor });
+        if ('drop' in options && !Object.prototype.hasOwnProperty.call(placed.anchors, options.drop)) throw new Error(`Unknown ${type} drop: ${options.drop}`);
+        // .anchor() moves the glyph so the named terminal sits at the insertion point.
+        const [bodyX, bodyY] = placed.transform(0, 0);
+        const geometry = `<path d="M 0,0 L ${W},0 L ${W},${-HH} L 0,${-HH} Z" ${stroke}/><path d="${leads}" ${stroke}/>${shapes}`;
+        // Mirror the glyph about the box center; pin and element labels are
+        // positioned separately below so they remain upright.
+        const mirror = reverse
+          ? (flip ? `translate(${W} 0) scale(-1 -1)` : `translate(${W} 0) scale(-1 1)`)
+          : (flip ? 'scale(1 -1)' : '');
+        let body = mirror ? `<g transform="${mirror}">${geometry}</g>` : geometry;
+        if (def.label && !labels.length) body += `<text x="${W / 2}" y="${flip ? HH / 2 : -HH / 2}" text-anchor="middle" dominant-baseline="central"${textFill} font-family="sans-serif" font-size="${labelSize}">${def.label}</text>`;
+        // usize is the label size in points (14 by default); the offset of a
+        // one-value label is 0.1 drawing units, which is 3.6 SVG units.
+        for (const label of labels) {
+          const usize = label.fontsize === undefined ? 14 : label.fontsize;
+          const pofst = 0.1 * 36;
+          const base = { center: ['center', 'center'], top: ['center', 'bottom'], bot: ['center', 'top'], bottom: ['center', 'top'], left: ['right', 'center'], right: ['left', 'center'] }[label.loc || 'center'];
+          const [ox, oy] = label.loc && label.loc !== 'center' ? anchorLabelOffset(base[0], base[1], pofst) : [0, 0];
+          const lx = reverse ? W - (W / 2 + ox) : W / 2 + ox;
+          const ly = flip ? -(-HH / 2 - oy) : -HH / 2 - oy;
+          const h = reverse ? mirrorH(base[0]) : base[0];
+          const v = flip ? mirrorV(base[1]) : base[1];
+          const fill = label.color ? ` fill="${label.color}"` : textFill;
+          const rotate = typeof label.rotate === 'number' ? ` transform="rotate(${-label.rotate} ${lx} ${ly})"` : '';
+          body += `<text x="${lx}" y="${ly}" text-anchor="${{ left: 'start', center: 'middle', right: 'end' }[h]}" dominant-baseline="${v === 'center' ? 'central' : v === 'top' ? 'hanging' : 'ideographic'}"${rotate}${fill} font-family="sans-serif" font-size="${usize}"><tspan x="${lx}" dy="${usize}">${labelContent(label.text)}</tspan></text>`;
+        }
+        const texts = pinTexts.map(({ x: tx, y: ty, value, size, h, v, overline }) => {
+          // Schemdraw renders Qbar as $\overline{Q}$; its SVG backend emits an
+          // overline decoration on the tspan so the bar follows the glyph width.
+          const content = overline
+            ? `<tspan text-decoration="overline">${escapeText(value)}</tspan>`
+            : escapeText(value);
+          return `<text x="${tx}" y="${ty}" text-anchor="${{ left: 'start', center: 'middle', right: 'end' }[h]}" dominant-baseline="${v === 'center' ? 'central' : v === 'top' ? 'hanging' : 'ideographic'}"${textFill} font-family="sans-serif" font-size="${size}">${content}</text>`;
+        }).join('');
+        elements.push(`<g transform="translate(${bodyX} ${bodyY}) rotate(${angle2})">${body}${texts}</g>`);
+        const top = flip ? -20 : -HH - 20, bottom = flip ? HH + 20 : 20;
+        for (const [lx, ly] of [[-20, top], [W + 20, top], [-20, bottom], [W + 20, bottom]]) {
+          const [bx2, by2] = placed.transform(lx, ly);
+          bounds(bx2, by2, bx2, by2);
+        }
+        if (name) names[name] = placed.anchors;
+        if ('drop' in options) [x, y] = placed.anchors[options.drop];
+        log(`${type}: pins=${pins.length}`);
+        continue;
+      }
+      if (['DE9', 'DB25', 'DA15', 'DC37', 'DD50'].includes(type)) {
+        const positive = (key, fallback) => {
+          if (!(key in options)) return fallback;
+          if (typeof options[key] !== 'string' || !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(options[key]) || !(Number(options[key]) > 0)) throw new Error(`${key} must be a positive number.`);
+          return Number(options[key]) * 36;
+        };
+        const sp = positive('pinspacing', 21.6), edge = positive('edge', 10.8);
+        let number = false;
+        if ('number' in options) {
+          if (!['True', 'False'].includes(options.number)) throw new Error('number must be True or False.');
+          number = options.number === 'True';
+        }
+        const pinfill = options.pinfill === undefined || options.pinfill === 'bg' ? 'white' : readColor(options.pinfill);
+        if ('at' in options) [x, y] = atPoint(options.at);
+        const cfg = {
+          DE9: { rows: 4, cols: [4, 5], starts: [9, 5], colsX: 1, baseRows: 4 },
+          DA15: { rows: 7, cols: [7, 8], starts: [15, 8], colsX: 1, baseRows: 7 },
+          DB25: { rows: 12, cols: [12, 13], starts: [25, 13], colsX: 1, baseRows: 12 },
+          DC37: { rows: 18, cols: [18, 19], starts: [37, 19], colsX: 1, baseRows: 18 },
+          DD50: { rows: 16, cols: [17, 16, 17], starts: [50, 33, 17], colsX: 2, baseRows: 16 }
+        }[type];
+        const w = cfg.colsX * sp + 2 * edge;
+        const h1 = cfg.baseRows * sp + 2 * edge, h2 = h1 + 18;
+        const pts = [[0, 0], [0, -h1], [w, -h2], [w, 18]];
+        const rounded = (points, r) => {
+          const seg = (a, b) => Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+          let d = '';
+          points.forEach((p, i) => {
+            const prev = points[(i + points.length - 1) % points.length], next = points[(i + 1) % points.length];
+            const inLen = seg(p, prev), outLen = seg(next, p);
+            const before = [p[0] + (prev[0] - p[0]) / inLen * r, p[1] + (prev[1] - p[1]) / inLen * r];
+            const after = [p[0] + (next[0] - p[0]) / outLen * r, p[1] + (next[1] - p[1]) / outLen * r];
+            d += `${i ? 'L' : 'M'} ${before[0].toFixed(3)},${before[1].toFixed(3)} Q ${p[0]},${p[1]} ${after[0].toFixed(3)},${after[1].toFixed(3)} `;
+          });
+          return d + 'Z';
+        };
+        let glyph = `<path d="${rounded(pts, 9)}" ${stroke}/>`;
+        const anchors = { xy: [0, 0] }, pinCircles = [];
+        const addPin = (px, py, num) => {
+          anchors[`pin${num}`] = [px, py];
+          glyph += `<circle cx="${px}" cy="${py}" r="3.6" fill="${pinfill}" stroke="${color}" stroke-width="2"/>`;
+          pinCircles.push([px, py]);
+          if (number) glyph += `<text x="${px}" y="${py - 12.6}" text-anchor="middle" dominant-baseline="ideographic"${textFill} font-family="sans-serif" font-size="9">${num}</text>`;
+        };
+        for (let c = 0; c < cfg.cols.length; c++) {
+          const px = edge + c * sp;
+          for (let i = 0; i < cfg.cols[c]; i++) {
+            const leftStyle = type === 'DD50' ? c !== 1 : c === 0;
+            const py = leftStyle
+              ? -(h1 - (i + 0.5) * sp - edge)
+              : -(h2 - (i + 0.75) * sp - edge);
+            addPin(px, py, cfg.starts[c] - i);
+          }
+        }
+        if ('theta' in options) {
+          if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta must be a finite number.');
+          const degrees = ((Number(options.theta) % 360) + 360) % 360;
+          direction = ({ 0: 'right', 90: 'up', 180: 'left', 270: 'down' })[degrees] || Number(options.theta);
+        } else if (selectedDirection) direction = selectedDirection;
+        const radians = typeof direction === 'number' ? direction * Math.PI / 180 : 0;
+        const [dx2, dy2, angle2] = typeof direction === 'number' ? [Math.cos(radians), -Math.sin(radians), -direction] : directions[direction];
+        const placed = placeComponent({ anchors }, [x, y], { direction: [dx2, dy2], anchor: options.anchor === undefined ? null : options.anchor });
+        const [bodyX, bodyY] = placed.transform(0, 0);
+        for (const label of labels) glyph += `<text x="${w / 2}" y="${-h2 / 2}" text-anchor="middle" dominant-baseline="central"${textFill} font-family="sans-serif" font-size="${labelSize}">${labelContent(label.text)}</text>`;
+        elements.push(`<g transform="translate(${bodyX} ${bodyY}) rotate(${angle2})">${glyph}</g>`);
+        for (const [px, py] of pinCircles) {
+          const [wx, wy] = placed.transform(px, py);
+          bgMarker(wx, wy, 3.6, color, pinfill);
+        }
+        for (const [lx, ly] of [[-10, 20], [-10, -h2 - 10], [w + 10, 20], [w + 10, -h2 - 10]]) {
+          const [bx2, by2] = placed.transform(lx, ly);
+          bounds(bx2, by2, bx2, by2);
+        }
+        if (name) names[name] = placed.anchors;
+        log(`${type}: pins=${Object.keys(anchors).filter(k => k.startsWith('pin')).length}`);
+        continue;
+      }
+      if (['CoaxConnect', 'Plug', 'Jack', 'Terminal', 'Jumper'].includes(type)) {
+        const positive = (key, fallback) => {
+          if (!(key in options)) return fallback;
+          if (typeof options[key] !== 'string' || !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(options[key]) || !(Number(options[key]) > 0)) throw new Error(`${key} must be a positive number.`);
+          return Number(options[key]) * 36;
+        };
+        if ('at' in options) [x, y] = atPoint(options.at);
+        let glyph = '', anchors = { xy: [0, 0] }, labelX = 0, labelY = 0;
+        // Inner "bg"-filled markers are re-drawn on the overlay layer.
+        let coverFill = null, coverRadius = 0, coverShadow = '';
+        if (type === 'CoaxConnect') {
+          const r1 = positive('radius', 14.4), r2 = positive('radiusinner', 4.32);
+          const fill = options.fillinner === undefined || options.fillinner === 'bg' ? 'white' : readColor(options.fillinner);
+          glyph = `<circle cx="0" cy="0" r="${r1}" fill="none" stroke="${color}" stroke-width="2"/><circle cx="0" cy="0" r="${r2}" fill="${fill}" stroke="${color}" stroke-width="2"/>`;
+          anchors = { center: [0, 0], N: [0, r1], S: [0, -r1], E: [r1, 0], W: [-r1, 0], xy: [0, 0] };
+          labelX = 0; labelY = r1 + 12;
+          coverFill = fill; coverRadius = r2;
+        } else if (type === 'Plug') {
+          glyph = `<path d="M 0,0 L 36,0 M 27,-9 L 36,0 L 27,9" ${stroke}/>`;
+          anchors = { start: [0, 0], end: [36, 0], center: [18, 0], xy: [0, 0] };
+          labelX = 18; labelY = -18;
+        } else if (type === 'Jack') {
+          glyph = `<path d="M 0,0 L -9,-9 M -9,9 L 0,0 L 36,0" ${stroke}/>`;
+          anchors = { start: [0, 0], end: [36, 0], center: [13.5, 0], xy: [0, 0] };
+          labelX = 13.5; labelY = -18;
+        } else if (type === 'Terminal') {
+          const r = positive('r', 6.48);
+          const open = !('open' in options) || options.open === 'True';
+          if ('open' in options && !['True', 'False'].includes(options.open)) throw new Error('open must be True or False.');
+          glyph = `<circle cx="0" cy="0" r="${r}" fill="${open ? 'white' : color}" stroke="${color}" stroke-width="2"/><path d="M ${-r},${2 * r} L ${r},${-2 * r}" ${stroke}/>`;
+          anchors = { start: [0, 0], center: [0, 0], end: [0, 0], xy: [0, 0] };
+          labelX = 0; labelY = r + 14;
+          if (open) { coverFill = 'white'; coverRadius = r; coverShadow = `<path d="M ${-r},${2 * r} L ${r},${-2 * r}" ${stroke}/>`; }
+        } else {
+          const spacing = positive('pinspacing', 21.6);
+          glyph = `<path d="M -9,9 L ${spacing + 9},9 L ${spacing + 9},-9 L -9,-9 Z" ${stroke}/>`;
+          anchors = { center: [spacing / 2 + 9, 0], xy: [0, 0] };
+          labelX = spacing / 2 + 9; labelY = -16;
+        }
+        for (const label of labels) glyph += `<text x="${labelX}" y="${labelY}" text-anchor="middle" dominant-baseline="central"${textFill} font-family="sans-serif" font-size="${labelSize}">${labelContent(label.text)}</text>`;
+        if ('theta' in options) {
+          if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta must be a finite number.');
+          const degrees = ((Number(options.theta) % 360) + 360) % 360;
+          direction = ({ 0: 'right', 90: 'up', 180: 'left', 270: 'down' })[degrees] || Number(options.theta);
+        } else if (selectedDirection) direction = selectedDirection;
+        const radians = typeof direction === 'number' ? direction * Math.PI / 180 : 0;
+        const [dx2, dy2, angle2] = typeof direction === 'number' ? [Math.cos(radians), -Math.sin(radians), -direction] : directions[direction];
+        const placed = placeComponent({ anchors }, [x, y], { direction: [dx2, dy2], anchor: options.anchor === undefined ? null : options.anchor });
+        const [bodyX, bodyY] = placed.transform(0, 0);
+        elements.push(`<g transform="translate(${bodyX} ${bodyY}) rotate(${angle2})">${glyph}</g>`);
+        // Redraw the cover circle (and the terminal slash on top of it) last.
+        if (coverFill !== null) {
+          overlay.push(`<g transform="translate(${bodyX} ${bodyY}) rotate(${angle2})"><circle cx="0" cy="0" r="${coverRadius}" fill="${coverFill}" stroke="${color}" stroke-width="2"/>${coverShadow}</g>`);
+        }
+        const bbox = type === 'CoaxConnect' ? 20 : type === 'Jumper' ? 40 : 24;
+        for (const [lx, ly] of [[-bbox, -bbox], [-bbox, bbox], [bbox, -bbox], [bbox, bbox]]) {
+          const [bx2, by2] = placed.transform(lx, ly);
+          bounds(bx2, by2, bx2, by2);
+        }
+        if (name) names[name] = placed.anchors;
+        log(`${type}: connector`);
+        continue;
+      }
+      if (type === 'BusConnect') {
+        const num = (key, fallback) => {
+          if (!(key in options)) return fallback;
+          if (typeof options[key] !== 'string' || !/^\d+$/.test(options[key]) || !Number.isSafeInteger(Number(options[key])) || Number(options[key]) <= 0 || Number(options[key]) > 100) throw new Error(`${key} must be an integer between 1 and 100.`);
+          return Number(options[key]);
+        };
+        const positive = (key, fallback) => {
+          if (!(key in options)) return fallback;
+          if (typeof options[key] !== 'string' || !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(options[key]) || !(Number(options[key]) > 0)) throw new Error(`${key} must be a positive number.`);
+          return Number(options[key]) * 36;
+        };
+        const n = num('n', 1);
+        let up = true;
+        if ('slant_up' in options) {
+          if (!['True', 'False'].includes(options.slant_up)) throw new Error('slant_up must be True or False.');
+          up = options.slant_up === 'True';
+        }
+        const dy = positive('dy', 21.6), l = positive('l', 108), lwbus = 'lwbus' in options ? Number(options.lwbus) : 4;
+        if (!(lwbus > 0) || !Number.isFinite(lwbus)) throw new Error('lwbus must be a positive number.');
+        if ('at' in options) [x, y] = atPoint(options.at);
+        const slanty = up ? 18 : -18;
+        const anchors = { start: [l, -18], end: [l, -(18 - n * dy)], xy: [0, 0] };
+        let glyph = '';
+        for (let i = 0; i < n; i++) {
+          const py = i * dy;
+          glyph += `<path d="M 0,${py} L ${l - 18},${py} L ${l},${py - slanty}" ${stroke}/>`;
+          anchors[`pin${i + 1}`] = [0, py];
+        }
+        glyph += `<path d="M ${l},-18 L ${l},${-(slanty - n * dy)}" fill="none" stroke="${color}" stroke-width="${lwbus}" stroke-linecap="round"/>`;
+        if ('theta' in options) {
+          if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta must be a finite number.');
+          const degrees = ((Number(options.theta) % 360) + 360) % 360;
+          direction = ({ 0: 'right', 90: 'up', 180: 'left', 270: 'down' })[degrees] || Number(options.theta);
+        } else if (selectedDirection) direction = selectedDirection;
+        const radians = typeof direction === 'number' ? direction * Math.PI / 180 : 0;
+        const [dx2, dy2, angle2] = typeof direction === 'number' ? [Math.cos(radians), -Math.sin(radians), -direction] : directions[direction];
+        const placed = placeComponent({ anchors }, [x, y], { direction: [dx2, dy2], anchor: options.anchor === undefined ? null : options.anchor });
+        const [bodyX, bodyY] = placed.transform(0, 0);
+        elements.push(`<g transform="translate(${bodyX} ${bodyY}) rotate(${angle2})">${glyph}</g>`);
+        for (const [lx, ly] of [[0, 0], [0, (n - 1) * dy], [l, -20], [l, 20]]) {
+          const [bx2, by2] = placed.transform(lx, ly);
+          bounds(bx2, by2, bx2, by2);
+        }
+        if (name) names[name] = placed.anchors;
+        log(`BusConnect: n=${n} up=${up}`);
+        continue;
+      }
+      if (type === 'Relay') {
+        const bool = (key, fallback) => {
+          if (!(key in options)) return fallback;
+          if (!['True', 'False'].includes(options[key])) throw new Error(`${key} must be True or False.`);
+          return options[key] === 'True';
+        };
+        const switchStyle = options.switch === undefined ? 'spst' : options.switch;
+        if (!['spst', 'spdt', 'dpst', 'dpdt'].includes(switchStyle)) throw new Error('Relay switch must be spst, spdt, dpst, or dpdt.');
+        const unit = options.unit === undefined ? 2 : Number(options.unit);
+        if (!Number.isFinite(unit) || unit !== 2) throw new Error('Relay unit only supports 2.');
+        const core = bool('core', true), link = bool('link', true), box = bool('box', true);
+        const cycl = bool('cycl', false);
+        const swreverse = bool('swreverse', false), swflip = bool('swflip', false);
+        if ('boxpad' in options && Number(options.boxpad) !== 0.25) throw new Error('Relay boxpad only supports 0.25.');
+        const boxfill = options.boxfill === undefined || options.boxfill === 'none' ? 'none' : readColor(options.boxfill);
+        if ('at' in options) [x, y] = atPoint(options.at);
+        const switchShift = cycl ? 9.17888446931108 : 0;
+        const boxLeft = cycl ? -16.111470524389393 : -9;
+        const boxRight = { spst: 59.22, spdt: 76.14, dpst: 95.22, dpdt: 126.54 }[switchStyle] + switchShift;
+        const linkStart = cycl ? 20.878884469311085 : 11.7;
+        const linkEnd = (swflip
+          ? { spst: 19.08, spdt: 18.72, dpst: 40.32, dpdt: 69.12 }
+          : { spst: 27.72, spdt: 42.12, dpst: 63.72, dpdt: 92.52 })[switchStyle] + (cycl ? 18.358 : 0);
+        const flipX = { spst: 79.92, spdt: 96.84, dpst: 115.92, dpdt: 147.24 }[switchStyle];
+        const centerX = (boxLeft + boxRight) / 2;
+        let body = '';
+        if (box) body += `<rect x="${boxLeft}" y="7.2" width="${boxRight - boxLeft}" height="57.6" fill="${boxfill}" stroke="${color}" stroke-width="2"/>`;
+        if (cycl) {
+          body += `<path d="M 0,0 L 0,18 ${relayCycloid} L 0,72" ${stroke}/>`;
+        } else {
+          body += `<path d="M 0,0 L 0,18 M 0,54 L 0,72 M 0,18 a 4.5 4.5 -270 1 1 0 9 M 0,27 a 4.5 4.5 -270 1 1 0 9 M 0,36 a 4.5 4.5 -270 1 1 0 9 M 0,45 a 4.5 4.5 -270 1 1 0 9" ${stroke}/>`;
+        }
+        if (core) body += `<path d="M ${cycl ? 19.07888446931109 : 9.9},18 L ${cycl ? 19.07888446931109 : 9.9},54" ${stroke}/>`;
+        const anchors = { in1: [0, 0], in2: [0, 72], center: [centerX, 36], xy: [0, 0] };
+        let switchBody = '';
+        if (switchStyle === 'spst') {
+          switchBody += `<path d="M 34.02,0 L 34.02,18 M 34.02,54 L 34.02,72 M 37.62,26.64 L 50.22,46.8" ${stroke}/>`;
+          switchBody += `<circle cx="34.02" cy="22.32" r="4.32" fill="white" stroke="${color}" stroke-width="2"/><circle cx="34.02" cy="49.68" r="4.32" fill="white" stroke="${color}" stroke-width="2"/>`;
+          anchors.a = [34.02, 0]; anchors.b = [34.02, 72];
+        } else if (switchStyle === 'spdt') {
+          switchBody += `<path d="M 48.42,22.32 L 48.42,11.16 L 48.42,0 M 62.82,49.68 L 62.82,60.84 L 62.82,72 M 34.02,49.68 L 34.02,60.84 L 34.02,72 M 52.02,26.64 L 57.42,43.2" ${stroke}/>`;
+          switchBody += `<circle cx="48.42" cy="22.32" r="4.32" fill="white" stroke="${color}" stroke-width="2"/><circle cx="34.02" cy="49.68" r="4.32" fill="white" stroke="${color}" stroke-width="2"/><circle cx="62.82" cy="49.68" r="4.32" fill="white" stroke="${color}" stroke-width="2"/>`;
+          anchors.a = [48.42, 0]; anchors.b = [62.82, 72]; anchors.c = [34.02, 72];
+        } else if (switchStyle === 'dpst') {
+          switchBody += `<path d="M 70.02,22.32 L 70.02,11.16 L 70.02,0 M 34.02,22.32 L 34.02,11.16 L 34.02,0 M 70.02,49.68 L 70.02,60.84 L 70.02,72 M 34.02,49.68 L 34.02,60.84 L 34.02,72 M 37.62,26.64 L 50.22,46.8 M 73.62,26.64 L 86.22,46.8" ${stroke}/>`;
+          switchBody += `<circle cx="70.02" cy="22.32" r="4.32" fill="white" stroke="${color}" stroke-width="2"/><circle cx="70.02" cy="49.68" r="4.32" fill="white" stroke="${color}" stroke-width="2"/><circle cx="34.02" cy="22.32" r="4.32" fill="white" stroke="${color}" stroke-width="2"/><circle cx="34.02" cy="49.68" r="4.32" fill="white" stroke="${color}" stroke-width="2"/>`;
+          anchors.t1 = [70.02, 72]; anchors.t2 = [34.02, 72]; anchors.p1 = [70.02, 0]; anchors.p2 = [34.02, 0];
+        } else {
+          switchBody += `<path d="M 98.82,22.32 L 98.82,11.16 L 98.82,0 M 48.42,22.32 L 48.42,11.16 L 48.42,0 M 113.22,49.68 L 113.22,60.84 L 113.22,72 M 84.42,49.68 L 84.42,60.84 L 84.42,72 M 62.82,49.68 L 62.82,60.84 L 62.82,72 M 34.02,49.68 L 34.02,60.84 L 34.02,72 M 52.02,26.64 L 57.42,43.2 M 102.42,26.64 L 107.82,43.2" ${stroke}/>`;
+          switchBody += `<circle cx="98.82" cy="22.32" r="4.32" fill="white" stroke="${color}" stroke-width="2"/><circle cx="84.42" cy="49.68" r="4.32" fill="white" stroke="${color}" stroke-width="2"/><circle cx="113.22" cy="49.68" r="4.32" fill="white" stroke="${color}" stroke-width="2"/><circle cx="48.42" cy="22.32" r="4.32" fill="white" stroke="${color}" stroke-width="2"/><circle cx="34.02" cy="49.68" r="4.32" fill="white" stroke="${color}" stroke-width="2"/><circle cx="62.82" cy="49.68" r="4.32" fill="white" stroke="${color}" stroke-width="2"/>`;
+          anchors.t1 = [113.22, 72]; anchors.t2 = [84.42, 72]; anchors.t3 = [62.82, 72]; anchors.t4 = [34.02, 72]; anchors.p1 = [98.82, 0]; anchors.p2 = [48.42, 0];
+        }
+        let renderedSwitch = switchBody;
+        if (swreverse || swflip) {
+          const transform = swflip && swreverse ? `translate(${flipX} 72) scale(-1 -1)`
+            : swflip ? `translate(${flipX} 0) scale(-1 1)`
+              : `translate(0 72) scale(1 -1)`;
+          renderedSwitch = `<g transform="${transform}">${switchBody}</g>`;
+          for (const key of Object.keys(anchors)) {
+            if (['in1', 'in2', 'center', 'xy'].includes(key)) continue;
+            const [ax, ay] = anchors[key];
+            const keepY = switchStyle === 'spst' && (key === 'a' || key === 'b');
+            anchors[key] = [(swflip ? flipX - ax : ax) + switchShift, swreverse && !keepY ? 72 - ay : ay];
+          }
+        } else if (switchShift) {
+          for (const key of Object.keys(anchors)) {
+            if (['in1', 'in2', 'center', 'xy'].includes(key)) continue;
+            anchors[key] = [anchors[key][0] + switchShift, anchors[key][1]];
+          }
+        }
+        if (switchShift) renderedSwitch = `<g transform="translate(${switchShift} 0)">${renderedSwitch}</g>`;
+        body += renderedSwitch;
+        if (link) body += `<path d="M ${linkStart},36 L ${linkEnd},36" fill="none" stroke="${color}" stroke-width="2" stroke-dasharray="2 3.3" stroke-linecap="round"/>`;
+        for (const label of labels) body += `<text x="${centerX}" y="13" text-anchor="middle" dominant-baseline="central"${textFill} font-family="sans-serif" font-size="${labelSize}">${labelContent(label.text)}</text>`;
+        if ('theta' in options) {
+          if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta must be a finite number.');
+          const degrees = ((Number(options.theta) % 360) + 360) % 360;
+          direction = ({ 0: 'right', 90: 'up', 180: 'left', 270: 'down' })[degrees] || Number(options.theta);
+        } else if (selectedDirection) direction = selectedDirection;
+        const radians = typeof direction === 'number' ? direction * Math.PI / 180 : 0;
+        const [dx2, dy2, angle2] = typeof direction === 'number' ? [Math.cos(radians), -Math.sin(radians), -direction] : directions[direction];
+        const placed = placeComponent({ anchors }, [x, y], { direction: [dx2, dy2], anchor: options.anchor === undefined ? null : options.anchor });
+        const [bodyX, bodyY] = placed.transform(0, 0);
+        elements.push(`<g transform="translate(${bodyX} ${bodyY}) rotate(${angle2})">${body}</g>`);
+        // White switch contacts again on top of the dotted link and any leads.
+        for (const key of ['a', 'b', 'c', 't1', 't2', 't3', 't4', 'p1', 'p2']) {
+          if (!Object.prototype.hasOwnProperty.call(placed.anchors, key)) continue;
+          const [wx, wy] = placed.anchors[key];
+          whiteMarker(wx, wy, 4.32, color);
+        }
+        for (const [lx, ly] of [[boxLeft, 7.2], [boxLeft, 64.8], [boxRight, 7.2], [boxRight, 64.8]]) {
+          const [bx2, by2] = placed.transform(lx, ly);
+          bounds(bx2, by2, bx2, by2);
+        }
+        if (name) names[name] = placed.anchors;
+        log(`Relay: switch=${switchStyle} core=${core} link=${link} box=${box}`);
+        continue;
+      }
+      if (type === 'Optocoupler') {
+        const bool = (key, fallback) => {
+          if (!(key in options)) return fallback;
+          if (!['True', 'False'].includes(options[key])) throw new Error(`${key} must be True or False.`);
+          return options[key] === 'True';
+        };
+        const box = bool('box', true), base = bool('base', false);
+        let boxpad = 0.2;
+        if ('boxpad' in options) {
+          if (typeof options.boxpad !== 'string' || !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.boxpad) || !(Number(options.boxpad) > 0)) throw new Error('boxpad must be a positive number.');
+          boxpad = Number(options.boxpad);
+        }
+        const boxfill = options.boxfill === undefined || options.boxfill === 'none' ? 'none' : readColor(options.boxfill);
+        if ('at' in options) [x, y] = atPoint(options.at);
+        const pad = boxpad * 36;
+        const boxLeft = -9 - pad, boxRight = 63.06 + pad, boxTop = -pad, boxBottom = 54 + pad;
+        const anchors = { anode: [boxLeft, 0], cathode: [boxLeft, 54], collector: [boxRight, 1.92], emitter: [boxRight, 52.08], center: [(boxLeft + boxRight) / 2, 27], xy: [0, 0] };
+        if (base) anchors.base = [43.8, boxBottom];
+        let body = '';
+        if (box) body += `<rect x="${boxLeft}" y="${boxTop}" width="${boxRight - boxLeft}" height="${boxBottom - boxTop}" fill="${boxfill}" stroke="${color}" stroke-width="2"/>`;
+        body += `<path d="M 0,0 L 0,20.7 M 9,33.3 L -9,33.3 M 0,33.3 L 0,54" ${stroke}/><path d="M 9,20.7 L 0,33.3 L -9,20.7 Z" fill="${color}"/>`;
+        body += `<path d="M 49.2,13.8 L 49.2,40.2 M 49.2,20.4 L 63.06,8.52 L 63.06,1.92 M 49.2,33.6 L 63.06,45.48 L 63.06,52.08 M 49.2,33.6 L 56.227,39.623" ${stroke}/><path d="M 61.541,44.178 L 53.884,42.356 L 58.57,36.89 Z" fill="${color}"/>`;
+        body += `<path d="M 18,19.8 L 32.4,19.8 M 18,34.2 L 32.4,34.2" ${stroke}/><path d="M 37.6,19.8 L 32.4,22.5 L 32.4,17.1 Z M 37.6,34.2 L 32.4,36.9 L 32.4,31.5 Z" fill="${color}"/>`;
+        body += `<path d="M 63.06,1.92 L ${boxRight},1.92 M 63.06,52.08 L ${boxRight},52.08 M 0,0 L ${boxLeft},0 M 0,54 L ${boxLeft},54" ${stroke}/>`;
+        if (base) body += `<path d="M 49.2,27 L 43.8,27 L 43.8,${boxBottom}" ${stroke}/>`;
+        for (const label of labels) body += `<text x="${(boxLeft + boxRight) / 2}" y="27" text-anchor="middle" dominant-baseline="central"${textFill} font-family="sans-serif" font-size="${labelSize}">${labelContent(label.text)}</text>`;
+        if ('theta' in options) {
+          if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta must be a finite number.');
+          const degrees = ((Number(options.theta) % 360) + 360) % 360;
+          direction = ({ 0: 'right', 90: 'up', 180: 'left', 270: 'down' })[degrees] || Number(options.theta);
+        } else if (selectedDirection) direction = selectedDirection;
+        const radians = typeof direction === 'number' ? direction * Math.PI / 180 : 0;
+        const [dx2, dy2, angle2] = typeof direction === 'number' ? [Math.cos(radians), -Math.sin(radians), -direction] : directions[direction];
+        const placed = placeComponent({ anchors }, [x, y], { direction: [dx2, dy2], anchor: options.anchor === undefined ? null : options.anchor });
+        const [bodyX, bodyY] = placed.transform(0, 0);
+        elements.push(`<g transform="translate(${bodyX} ${bodyY}) rotate(${angle2})">${body}</g>`);
+        for (const [lx, ly] of [[boxLeft, boxTop], [boxLeft, boxBottom], [boxRight, boxTop], [boxRight, boxBottom]]) {
+          const [bx2, by2] = placed.transform(lx, ly);
+          bounds(bx2, by2, bx2, by2);
+        }
+        if (name) names[name] = placed.anchors;
+        log(`Optocoupler: box=${box} base=${base}`);
+        continue;
+      }
+      if (type === 'Ic' || type === 'Multiplexer') {
+        const isMux = type === 'Multiplexer';
+        const allowedIc = ['at', 'anchor', 'drop', 'theta', 'color', 'size', 'pin', ...(isMux ? ['demux', 'slant', 'pinspacing', 'flip', 'reverse'] : [])];
+        if (labels.some(label => label.items || label.halign != null || label.ofst != null || label.rotate !== undefined) || Object.keys(options).some(key => !allowedIc.includes(key))) throw new Error(`${type} supports size, pin, at, anchor, drop, theta, color, and labels${isMux ? ', demux, slant, pinspacing, flip, reverse' : ''}.`);
+        const sizeMatch = /^\(\s*(\d+(?:\.\d+)?|\.\d+)\s+(\d+(?:\.\d+)?|\.\d+)\s*\)$/.exec(options.size === undefined ? '' : options.size);
+        if (!sizeMatch) throw new Error(`${type} requires size="(width height)".`);
+        if ('at' in options) [x, y] = atPoint(options.at);
+        const W = Number(sizeMatch[1]) * 36, HH = Number(sizeMatch[2]) * 36;
+        if (!(W > 0) || !(HH > 0)) throw new Error(`${type} size must be positive.`);
+        let demux = false, slant = 0, pinspacing = 0;
+        if (isMux) {
+          if ('demux' in options) {
+            if (!['True', 'False'].includes(options.demux)) throw new Error('demux must be True or False.');
+            demux = options.demux === 'True';
+          }
+          const number = (key, fallback, max) => {
+            if (!(key in options)) return fallback;
+            if (typeof options[key] !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options[key]) || !Number.isFinite(Number(options[key])) || Number(options[key]) > max || Number(options[key]) < -max) throw new Error(`${key} must be a number from -${max} to ${max}.`);
+            return Number(options[key]);
+          };
+          slant = number('slant', 25, 89);
+          pinspacing = number('pinspacing', 0, 100);
+          if (pinspacing < 0) throw new Error('pinspacing must be a positive number.');
+        }
+        const pins = { L: [], R: [], T: [], B: [] };
+        const used = new Set(['center', 'xy']);
+        for (const raw of options.pin || []) {
+          const parts = String(raw).trim().split(/\s+/);
+          if (parts.length < 2 || parts.length > 3) throw new Error(`pin must be specified as "side name number": ${raw}`);
+          const side = parts[0].toUpperCase();
+          if (!Object.prototype.hasOwnProperty.call(pins, side)) throw new Error(`pin side must be L, R, T, or B: ${raw}`);
+          const name = parts[1] === '-' ? null : parts[1];
+          const num = parts[2] === undefined || parts[2] === '-' ? null : parts[2];
+          if (name !== null && !/^[A-Za-z_]\w*$/.test(name) && !(isMux && name === '>')) throw new Error(`pin name must contain only letters, digits, and underscores: ${name}`);
+          if (num !== null && !/^[A-Za-z0-9_]+$/.test(num)) throw new Error(`Invalid pin number: ${num}`);
+          if (name && used.has(name)) throw new Error(`Duplicate terminal name: ${name}`);
+          if (num && used.has('pin' + num)) throw new Error(`Duplicate terminal name: pin${num}`);
+          if (name) used.add(name);
+          if (num) used.add('pin' + num);
+          pins[side].push({ name, num, clock: name === '>' });
+        }
+        const pad = 18, leadLen = 18;
+        const anchors = { center: [W / 2, -HH / 2], xy: [0, 0] };
+        let leads = '';
+        // Pin text positions are collected in local SVG coordinates (y down)
+        // and written out once flip/reverse have been applied.
+        const pending = [];
+        const text = (px, py, value, size, align, side) => {
+          pending.push({ px, py, value, size, align, side });
+        };
+        // The glyph is built in drawing coordinates (y up). The body group
+        // mirrors it once, so the box sits above the origin (negative SVG y).
+        const effectiveSlant = isMux ? (demux ? slant : -slant) : 0;
+        const tan = Math.tan(effectiveSlant * Math.PI / 180);
+        const corners = effectiveSlant < 0
+          ? [[0, W * tan], [W, 0], [W, HH], [0, HH - W * tan]]
+          : effectiveSlant > 0
+            ? [[0, 0], [W, -W * tan], [W, HH + W * tan], [0, HH]]
+            : [[0, 0], [W, 0], [W, HH], [0, HH]];
+        // Schemdraw's _pinpos measures L/R pins from the bottom edge and
+        // follows the slanted top/bottom edges for T/B pins.
+        const topAt = z => HH + (effectiveSlant < 0 ? -W * tan : 0) + z * tan;
+        const bottomAt = z => (effectiveSlant < 0 ? W * tan : 0) - z * tan;
+        for (const side of ['L', 'R', 'T', 'B']) {
+          const list = pins[side], n = list.length;
+          const len = side === 'L' || side === 'R' ? HH : W;
+          const spacing = pinspacing > 0 ? pinspacing * 36 : (n > 1 ? (len - 2 * pad) / (n - 1) : 0);
+          const sidePad = pinspacing > 0 ? (len - spacing * (n - 1)) / 2 : pad;
+          list.forEach((pin, i) => {
+            const z = n > 1 ? sidePad + i * spacing : len / 2;
+            const point = side === 'L' ? [0, z]
+              : side === 'R' ? [W, z]
+              : side === 'T' ? [z, topAt(z)]
+              : [z, bottomAt(z)];
+            const leadext = { L: [-leadLen, 0], R: [leadLen, 0], T: [0, leadLen], B: [0, -leadLen] }[side];
+            const end = [point[0] + leadext[0], point[1] + leadext[1]];
+            leads += `M ${point[0]},${point[1]} L ${end[0]},${end[1]} `;
+            anchors[`in${side}${i + 1}`] = [end[0], -end[1]];
+            if (pin.name) anchors[pin.name] = [end[0], -end[1]];
+            if (pin.num) anchors[`pin${pin.num}`] = [end[0], -end[1]];
+            if (pin.clock) {
+              // Schemdraw's _drawclkpin: 0.35 unit deep, 0.175 unit wide.
+              // The triangle points into the box.
+              const dir = { L: 1, R: -1, T: -1, B: 1 }[side];
+              if (side === 'T' || side === 'B') leads += `M ${point[0] - 6.3},${point[1]} L ${point[0]},${point[1] + dir * 12.6} L ${point[0] + 6.3},${point[1]} `;
+              else leads += `M ${point[0]},${point[1] + 6.3} L ${point[0] + dir * 12.6},${point[1]} L ${point[0]},${point[1] - 6.3} `;
+              anchors.CLK = [end[0], -end[1]];
+              anchors['>'] = [end[0], -end[1]];
+            }
+            const lofst = { L: [5.4, 0], R: [-5.4, 0], T: [0, -5.4], B: [0, 5.4] }[side];
+            const lalign = { L: ['left', 'center'], R: ['right', 'center'], T: ['center', 'top'], B: ['center', 'bottom'] }[side];
+            if (pin.name && !pin.clock) text(point[0] + lofst[0], -(point[1] + lofst[1]), pin.name, 14, lalign, side);
+            if (pin.num) {
+              const pofst = { L: [-2.7, 2.7], R: [2.7, 2.7], T: [2.7, 2.7], B: [2.7, -2.7] }[side];
+              const palign = { L: ['right', 'bottom'], R: ['left', 'bottom'], T: ['left', 'bottom'], B: ['left', 'top'] }[side];
+              text(point[0] + pofst[0], -(point[1] + pofst[1]), pin.num, 11, palign, side);
+            }
+          });
+        }
+        if ('theta' in options) {
+          if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta must be a finite number.');
+          const degrees = ((Number(options.theta) % 360) + 360) % 360;
+          direction = ({ 0: 'right', 90: 'up', 180: 'left', 270: 'down' })[degrees] || Number(options.theta);
+        } else if (selectedDirection) direction = selectedDirection;
+        const radians = typeof direction === 'number' ? direction * Math.PI / 180 : 0;
+        const [dx2, dy2, angle2] = typeof direction === 'number' ? [Math.cos(radians), -Math.sin(radians), -direction] : directions[direction];
+        const flip = isMux && 'flip' in options, reverse = isMux && 'reverse' in options;
+        let shape = `M ${corners.map(([px, py]) => `${px},${py}`).join(' L ')} Z`;
+        const transformPath = (d, mate) => d.replace(/([ML])\s*(-?[\d.e+-]+),(-?[\d.e+-]+)/g,
+          (_, cmd, px, py) => { const [mx, my] = mate(Number(px), Number(py)); return `${cmd} ${mx},${my}`; });
+        const swapAlign = (value, a, b) => value === a ? b : value === b ? a : value;
+        // Schemdraw mirrors segments/anchors and flips the vertical alignment
+        // of T/B texts; pin texts themselves stay upright.
+        if (flip) {
+          shape = transformPath(shape, (px, py) => [px, -py]);
+          leads = transformPath(leads, (px, py) => [px, -py]);
+          for (const item of pending) {
+            item.py = -item.py;
+            if (item.side === 'T' || item.side === 'B') item.align = [item.align[0], swapAlign(item.align[1], 'top', 'bottom')];
+          }
+          for (const key of Object.keys(anchors)) anchors[key] = [anchors[key][0], -anchors[key][1]];
+        }
+        if (reverse) {
+          shape = transformPath(shape, (px, py) => [W - px, py]);
+          leads = transformPath(leads, (px, py) => [W - px, py]);
+          for (const item of pending) {
+            item.px = W - item.px;
+            if (item.side === 'L' || item.side === 'R') item.align = [swapAlign(item.align[0], 'left', 'right'), item.align[1]];
+          }
+          for (const key of Object.keys(anchors)) anchors[key] = [W - anchors[key][0], anchors[key][1]];
+        }
+        const placed = placeComponent({ anchors }, [x, y], { direction: [dx2, dy2], anchor: options.anchor === undefined ? null : options.anchor });
+        if ('drop' in options && !Object.prototype.hasOwnProperty.call(placed.anchors, options.drop)) throw new Error(`Unknown ${type} drop: ${options.drop}`);
+        const texts = pending.map(({ px, py, value, size, align }) => {
+          const anchor = { left: 'start', center: 'middle', right: 'end' }[align[0]];
+          const baseline = align[1] === 'center' ? 'central' : align[1] === 'top' ? 'hanging' : 'auto';
+          return `<text x="${px}" y="${py}" text-anchor="${anchor}" dominant-baseline="${baseline}"${textFill} font-family="sans-serif" font-size="${size}">${escapeText(value)}</text>`;
+        }).join('');
+        // The component label sits at the box center (center anchor), so flip
+        // moves it with the box.
+        const labelY = flip ? HH / 2 : -HH / 2;
+        const labelTexts = labels.map(label => `<text x="${W / 2}" y="${labelY}" text-anchor="middle" dominant-baseline="central"${textFill} font-family="sans-serif" font-size="${labelSize}">${labelContent(label.text)}</text>`).join('');
+        const body = `<g transform="scale(1 -1)"><path d="${shape}" ${stroke}/><path d="${leads}" ${stroke}/></g>${labelTexts}`;
+        // .anchor() moves the glyph so the named terminal sits at the insertion
+        // point; use the anchor-adjusted local origin for the whole group.
+        const [bodyX, bodyY] = placed.transform(0, 0);
+        elements.push(`<g transform="translate(${bodyX} ${bodyY}) rotate(${angle2})">${body}${texts}</g>`);
+        // Reserve room for the 0.5-unit leads and pin numbers. When there are
+        // no side labels, keep Schemdraw's full unit of margin around the box.
+        const sideLabel = ['L', 'R'].some(side => (options.pin || []).some(raw => {
+          const parts = String(raw).trim().split(/\s+/);
+          return parts[0].toUpperCase() === side && parts[1] && parts[1] !== '-';
+        }));
+        const margin = sideLabel ? 21.6 : 39.6;
+        const frame = corners.map(([px, py]) => {
+          let fx = px, fy = py;
+          if (flip) fy = -fy;
+          if (reverse) fx = W - fx;
+          return [fx, fy];
+        });
+        const xs = frame.map(point => point[0]), ys = frame.map(point => point[1]);
+        const box = [
+          [Math.min(...xs) - margin, -Math.max(...ys) - margin],
+          [Math.max(...xs) + margin, -Math.max(...ys) - margin],
+          [Math.min(...xs) - margin, -Math.min(...ys) + margin],
+          [Math.max(...xs) + margin, -Math.min(...ys) + margin]
+        ];
+        for (const [lx, ly] of box) {
+          const [bx2, by2] = placed.transform(lx, ly);
+          bounds(bx2, by2, bx2, by2);
+        }
+        if (name) names[name] = placed.anchors;
+        if ('drop' in options) [x, y] = placed.anchors[options.drop];
+        log(`${type}: size=${sizeMatch[1]}x${sizeMatch[2]} pins=${(options.pin || []).length}`);
+        continue;
+      }
+      if (['IcDIP', 'Header', 'Transformer'].includes(type)) {
+        const specific = type === 'IcDIP' ? ['pins', 'notch', 'width', 'pinw', 'spacing', 'number', 'pfontsize'] : type === 'Header' ? ['rows', 'cols', 'style', 'numbering', 'shownumber', 'pinspacing', 'edge', 'pinfill', 'pinsleft', 'pinsright', 'pinalignleft', 'pinalignright', 'pinfontsizeleft', 'pinfontsizeright'] : ['t1', 't2', 'core', 'loop', 'align'];
+        if (labels.length || length !== null || Object.keys(options).some(k => !['at', 'anchor', 'drop', 'theta', 'color', ...specific].includes(k))) throw new Error(`The specified arguments are not supported for ${type}.`);
+        if (selectedDirection && 'theta' in options) throw new Error('A direction and theta cannot be specified together.');
+        if (type === 'Header' && (selectedDirection || 'theta' in options)) throw new Error('Header does not support direction specifiers.');
+        const num = (key, fallback, integer = false, max = 100) => {
+          const v = options[key];
+          if (v === undefined) return fallback;
+          if (typeof v !== 'string' || !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(v) || !Number.isFinite(Number(v)) || Number(v) <= 0 || Number(v) > max || (integer && !Number.isSafeInteger(Number(v)))) throw new Error(`${key} must be a positive ${integer ? 'integer' : 'number'} within range.`);
+          return Number(v);
+        };
+        const bool = (key, fallback) => {
+          if (!(key in options)) return fallback;
+          if (!['True', 'False'].includes(options[key])) throw new Error(`${key} must be True or False.`);
+          return options[key] === 'True';
+        };
+        const anchors = { xy: [0, 0] }, shapes = [], texts = [], pinMarks = [];
+        let box;
+        const path = d => shapes.push(`<path d="${d}" ${stroke}/>`);
+        const text = (px, py, value, size, align = 'middle', baseline = 'central') => texts.push({ px, py, value, size, align, baseline });
+        if (type === 'IcDIP') {
+          const pins = num('pins', 8, true, 100), w = num('width', 3) * 36, pw = num('pinw', .6) * 36, space = num('spacing', .5) * 36;
+          if (pins % 2) throw new Error('IcDIP pins must be an even number.');
+          const height = pins / 2 * pw + (pins / 2 + 1) * space;
+          const notch = bool('notch', true), number = bool('number', true), fs = num('pfontsize', 10, false, 1000);
+          path(`M 0,0 H ${w} V ${-height} H 0 Z`);
+          if (notch) path(`M ${w / 2 - pw / 2},${-height} A ${pw / 2},${pw / 2} 0 0 0 ${w / 2 + pw / 2},${-height}`);
+          for (let i = 0; i < pins / 2; i++) {
+            const y1 = -(space + i * (space + pw)), y2 = y1 - pw, ym = (y1 + y2) / 2, left = pins / 2 - i, right = pins / 2 + i + 1;
+            path(`M 0,${y1} V ${y2} H ${-pw} V ${y1} Z M ${w},${y1} V ${y2} H ${w + pw} V ${y1} Z`);
+            anchors[`p${left}`] = [-pw, ym]; anchors[`p${left}_in`] = [0, ym];
+            anchors[`p${right}`] = [w + pw, ym]; anchors[`p${right}_in`] = [w, ym];
+            if (number) { text(-pw / 2, ym, left, fs); text(w + pw / 2, ym, right, fs); }
+          }
+          box = [Math.min(-pw, notch ? w / 2 - pw / 2 : 0), -height, Math.max(w + pw, notch ? w / 2 + pw / 2 : w), 0];
+        } else if (type === 'Header') {
+          const rows = num('rows', 4, true, 100), cols = num('cols', 1, true, 2), spacing = num('pinspacing', .6) * 36, edge = num('edge', .3) * 36;
+          const style = options.style || 'round', numbering = options.numbering || 'lr', shownumber = bool('shownumber', false);
+          const pinList = (key) => {
+            if (!(key in options)) return null;
+            const parsed = readLabel(options[key]);
+            if (!parsed.items) throw new Error(`${key} must use the form ['A' 'B'].`);
+            return parsed.items;
+          };
+          const pinLeft = pinList('pinsleft'), pinRight = pinList('pinsright');
+          const fontSize = (key) => {
+            if (!(key in options)) return 9;
+            if (typeof options[key] !== 'string' || !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(options[key]) || !(Number(options[key]) > 0)) throw new Error(`${key} must be a positive number.`);
+            return Number(options[key]);
+          };
+          const pinFontLeft = fontSize('pinfontsizeleft'), pinFontRight = fontSize('pinfontsizeright');
+          if (!['round', 'square', 'screw'].includes(style) || !['lr', 'ud', 'ccw'].includes(numbering)) throw new Error('Invalid Header style or numbering.');
+          // Schemdraw resolves the default 'bg' fill to its default white background.
+          const fill = options.pinfill === undefined || options.pinfill === 'bg' ? 'white' : readColor(options.pinfill);
+          const w = (cols - 1) * spacing + 2 * edge, h = (rows - 1) * spacing + 2 * edge, r = 3.6;
+          path(`M 0,0 V ${-h} H ${w} V 0 Z`);
+          for (let row = 0; row < rows; row++) for (let col = 0; col < cols; col++) {
+            const px = col * spacing + edge, py = -h + row * spacing + edge;
+            const n = numbering === 'lr' ? row * cols + col + 1 : numbering === 'ud' ? row + col * rows + 1 : col % 2 ? rows * col + rows - row : row + 1;
+            anchors[`pin${n}`] = [px, py];
+            if (style === 'square') {
+              shapes.push(`<rect x="${px-r}" y="${py-r}" width="${2*r}" height="${2*r}" fill="white" stroke="${color}" stroke-width="2"/>`);
+              pinMarks.push({ px, py, r, style, fill: 'white' });
+            } else {
+              shapes.push(`<circle cx="${px}" cy="${py}" r="${style === 'screw' ? r * 1.75 : r}" fill="${fill}" stroke="${color}" stroke-width="2"/>`);
+              pinMarks.push({ px, py, r: style === 'screw' ? r * 1.75 : r, style, fill });
+              if (style === 'screw') path(`M ${px+r},${py-r} L ${px-r},${py+r}`);
+            }
+            if (shownumber) text(col % 2 ? w + 1.8 : -1.8, py, n, 9, col % 2 ? 'start' : 'end', 'ideographic');
+            // Pin name labels (Schemdraw `pinsleft` / `pinsright`).
+            if (pinLeft && (cols === 1 || col % 2 === 0)) text(-1.8, py, pinLeft[row] ?? '', pinFontLeft, 'end', 'ideographic');
+            if (pinRight && col % 2 === 1) text(w + 1.8, py, pinRight[row] ?? '', pinFontRight, 'start', 'ideographic');
+          }
+          box = [-7, -h - 7, w + 7, 7];
+        } else {
+          const t1 = num('t1', 4, true, 100), t2 = num('t2', 4, true, 100), core = bool('core', true);
+          if (bool('loop', false)) throw new Error('Transformer loop=True is not supported.');
+          const align = options.align || 'center';
+          if (!['center', 'bottom', 'top'].includes(align)) throw new Error('Invalid Transformer align.');
+          const cw = (core ? 1 : .75) * 36, step = .4 * 36, lh = t1 * step, rh = t2 * step;
+          const rb = align === 'center' ? (lh-rh)/2 : align === 'bottom' ? 0 : lh-rh;
+          anchors.p1 = [0, -lh]; anchors.p2 = [0, 0]; anchors.s1 = [cw, -rb-rh]; anchors.s2 = [cw, -rb];
+          for (let k = 0; k < t1; k++) { path(`M 0,${-k*step} A ${step/2},${step/2} 0 0 0 0,${-(k+1)*step}`); if (k < t1-1) anchors[`tapP${k+1}`] = [0, -(k+1)*step]; }
+          for (let k = 0; k < t2; k++) { path(`M ${cw},${-rb-k*step} A ${step/2},${step/2} 0 0 1 ${cw},${-rb-(k+1)*step}`); if (k < t2-1) anchors[`tapS${k+1}`] = [cw, -rb-(k+1)*step]; }
+          const top = Math.max(lh, rb+rh), bot = Math.min(0, rb);
+          if (core) path(`M ${cw*.4},${-top} V ${-bot} M ${cw*.6},${-top} V ${-bot}`);
+          box = [-step/2, -top, cw+step/2, -bot];
+        }
+        let theta = type === 'Header' ? 0 : selectedDirection ? ({right: 0, up: 90, left: 180, down: -90})[selectedDirection] : typeof direction === 'number' ? direction : ({right: 0, up: 90, left: 180, down: -90})[direction];
+        if ('theta' in options) {
+          if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta must be a finite number.');
+          theta = Number(options.theta);
+        }
+        const a = -theta * Math.PI / 180, dx = Math.cos(a), dy = Math.sin(a);
+        const origin = 'at' in options ? atPoint(options.at) : [x, y];
+        const placed = placeComponent({ anchors }, origin, { direction: [dx, dy], anchor: options.anchor === undefined ? null : options.anchor });
+        if ('drop' in options && !Object.prototype.hasOwnProperty.call(anchors, options.drop)) throw new Error(`Unknown drop: ${options.drop}`);
+        const [ox, oy] = placed.transform(0, 0);
+        elements.push(`<g transform="translate(${ox} ${oy}) rotate(${-theta})">${shapes.join('')}</g>`);
+        for (const mark of pinMarks) {
+          if (mark.style === 'square') {
+            // Keep the square aligned with a rotated Header by reusing its transform.
+            overlay.push(`<rect x="${mark.px - mark.r}" y="${mark.py - mark.r}" width="${2 * mark.r}" height="${2 * mark.r}" fill="${mark.fill}" stroke="${color}" stroke-width="2" transform="translate(${ox} ${oy}) rotate(${-theta})"/>`);
+          } else {
+            const [wx, wy] = placed.transform(mark.px, mark.py);
+            bgMarker(wx, wy, mark.r, color, mark.fill);
+          }
+        }
+        for (const [px, py] of [[box[0],box[1]], [box[0],box[3]], [box[2],box[1]], [box[2],box[3]]]) { const [bx, by] = placed.transform(px, py); bounds(bx-2, by-2, bx+2, by+2); }
+        for (const t of texts) {
+          const [tx, ty] = placed.transform(t.px, t.py), width = String(t.value).length * t.size;
+          bounds(tx-width, ty-t.size, tx+width, ty+t.size);
+          if (t.baseline === 'ideographic') elements.push(`<text x="${tx}" y="${ty - t.size}" text-anchor="${t.align}" dominant-baseline="ideographic" fill="${color}" font-family="sans-serif" font-size="${t.size}"><tspan x="${tx}" dy="${t.size}">${t.value}</tspan></text>`);
+          else elements.push(`<text x="${tx}" y="${ty}" text-anchor="${t.align}" dominant-baseline="central" fill="${color}" font-family="sans-serif" font-size="${t.size}">${t.value}</text>`);
+        }
+        if (name) names[name] = placed.anchors;
+        if ('drop' in options) { [x, y] = placed.anchors[options.drop]; direction = theta; }
+        log(`${type}: ${'drop' in options ? 'drop=' + options.drop : 'cursor unchanged'}`);
+        continue;
+      }
       if (type === 'Wire') {
-        if (selectedDirection || length !== null || Object.keys(options).some(key => !['at', 'to', 'shape', 'k', 'arrow', 'color'].includes(key))) throw new Error('Wire は shape、k、arrow、at、to、color、label に対応しています。');
+        if (labels.some(label => label.rotate !== undefined || (label.ofst != null && !Array.isArray(label.ofst)))) throw new Error('Wire labels do not support rotate or numeric ofst.');
+        if (selectedDirection || length !== null || Object.keys(options).some(key => !['at', 'to', 'shape', 'k', 'arrow', 'color'].includes(key))) throw new Error('Wire supports shape, k, arrow, at, to, color, and label.');
         const wireShape = options.shape === undefined ? '-' : options.shape;
-        if (!['-', '-|', '|-', 'z', 'N', 'n', 'c'].includes(wireShape)) throw new Error(`未対応の Wire shape: ${wireShape}`);
-        if ('arrow' in options && options.arrow !== '->') throw new Error('Wire の arrow は -> のみ対応しています。');
+        if (!['-', '-|', '|-', 'z', 'N', 'n', 'c'].includes(wireShape)) throw new Error(`Unsupported Wire shape: ${wireShape}`);
+        if ('arrow' in options && options.arrow !== '->') throw new Error('Wire arrow only supports ->.');
         let k = 36;
         if ('k' in options) {
-          if (typeof options.k !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.k) || !Number.isFinite(Number(options.k) * 36)) throw new Error('Wire の k は有限の数値で指定してください。');
+          if (typeof options.k !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.k) || !Number.isFinite(Number(options.k) * 36)) throw new Error('Wire k must be a finite number.');
           k = Number(options.k) * 36;
         }
         if ('at' in options) [x, y] = atPoint(options.at);
@@ -297,14 +3026,14 @@
         else if (wireShape === 'N') { const step = dy < 0 ? -Math.abs(k) : Math.abs(k); vertices = [start, [x, y + step], [end[0], end[1] - step], end]; mid = [x + dx / 2, y + dy / 2]; direction = dy < 0 ? 'up' : 'down'; }
         else if (wireShape === 'n') { vertices = [start, [x, y - k], [end[0], y - k], end]; mid = [x + dx / 2, y - k]; direction = -dy > k ? 'up' : 'down'; }
         else { vertices = [start, [x + k, y], [x + k, end[1]], end]; mid = [x + k, y + dy / 2]; direction = dx > k ? 'right' : 'left'; }
-        if (vertices.some(p => p.some(n => !Number.isFinite(n)))) throw new Error('Wire の座標が大きすぎます。');
+        if (vertices.some(p => p.some(n => !Number.isFinite(n)))) throw new Error('Wire coordinates are too large.');
         const path = vertices.map((p, i) => `${i ? 'L' : 'M'} ${p[0]},${p[1]}`).join(' ');
         elements.push(`<path d="${path}" ${stroke}/>`);
         for (const [vx, vy] of vertices) bounds(vx - 2, vy - 2, vx + 2, vy + 2);
         if ('arrow' in options) {
           let i = vertices.length - 2;
           while (i >= 0 && vertices[i][0] === end[0] && vertices[i][1] === end[1]) i--;
-          if (i < 0) throw new Error('長さがゼロの Wire に矢印を付けられません。');
+          if (i < 0) throw new Error('Cannot add an arrow to a zero-length Wire.');
           const ax = end[0] - vertices[i][0], ay = end[1] - vertices[i][1], len = Math.hypot(ax, ay);
           const ux = ax / len, uy = ay / len, bx = end[0] - 9 * ux, by = end[1] - 9 * uy;
           const corners = [[bx - 2.7 * uy, by + 2.7 * ux], [bx + 2.7 * uy, by - 2.7 * ux]];
@@ -315,7 +3044,7 @@
         const xs = vertices.map(p => p[0]), ys = vertices.map(p => p[1]);
         const left = Math.min(...xs), right = Math.max(...xs), top = Math.min(...ys), bottom = Math.max(...ys);
         for (const label of labels) {
-          if (label.items || typeof label.text !== 'string') throw new Error('Wire のリストラベルには対応していません。');
+          if (label.items || typeof label.text !== 'string') throw new Error('Wire does not support list labels.');
           const loc = label.loc || 'mid';
           let lx, ly, ha = 'center', va = 'center';
           if (Object.prototype.hasOwnProperty.call(anchors, loc)) {
@@ -327,56 +3056,312 @@
           else if (loc === 'bot' || loc === 'bottom') { lx = (left + right) / 2; ly = bottom; va = 'top'; }
           else if (loc === 'left') { lx = left; ly = (top + bottom) / 2; ha = 'right'; }
           else if (loc === 'right') { lx = right; ly = (top + bottom) / 2; ha = 'left'; }
-          else throw new Error(`未対応の Wire label loc: ${loc}`);
+          else throw new Error(`Unsupported Wire label loc: ${loc}`);
           if (label.ofst == null) {
             const offset = 3.6;
             lx += ha === 'left' ? offset : ha === 'right' ? -offset : 0;
             ly += va === 'top' ? offset : va === 'bottom' ? -offset : (Object.prototype.hasOwnProperty.call(anchors, loc) ? -offset : 0);
           } else {
             const ox = label.ofst[0] * 36, oy = label.ofst[1] * 36;
-            if (!Number.isFinite(ox) || !Number.isFinite(oy)) throw new Error('Wire label の ofst は有限の数値で指定してください。');
+            if (!Number.isFinite(ox) || !Number.isFinite(oy)) throw new Error('Wire label ofst must be a finite number.');
             lx += ox; ly -= oy;
           }
           ha = label.halign || ha;
-          if (!['left', 'right', 'center'].includes(ha)) throw new Error(`不正な label halign: ${ha}`);
+          if (!['left', 'right', 'center'].includes(ha)) throw new Error(`Invalid label halign: ${ha}`);
           const anchor = { left: 'start', right: 'end', center: 'middle' }[ha];
           const baseline = va === 'top' ? 'hanging' : va === 'bottom' ? 'auto' : 'central';
           const visible = label.text.startsWith('$') && label.text.endsWith('$') ? label.text.replace(/[$_{}]/g, '') : label.text;
           const width = Math.max(12, Array.from(visible).length * 10);
           bounds(lx - (ha === 'right' ? width : ha === 'center' ? width / 2 : 0), ly - 18, lx + (ha === 'left' ? width : ha === 'center' ? width / 2 : 0), ly + 18);
-          elements.push(`<text x="${lx}" y="${ly}" text-anchor="${anchor}" dominant-baseline="${baseline}"${textFill} font-family="sans-serif" font-size="14">${labelContent(label.text)}</text>`);
+          elements.push(`<text x="${lx}" y="${ly}" text-anchor="${anchor}" dominant-baseline="${baseline}"${textFill} font-family="sans-serif" font-size="${labelSize}">${labelContent(label.text)}</text>`);
         }
-        if (name) names[name] = anchors;
+        if (name) {
+          names[name] = anchors;
+          namedBoxes[name] = { ...elemBox };
+        }
         [x, y] = end;
         log(`Wire: shape=${wireShape}`);
         continue;
       }
-      if (labels.some(label => (type !== 'Dot' && (label.halign != null || label.ofst != null)) || ['start', 'end'].includes(label.loc))) throw new Error(`${type} の指定された label 引数には対応していません。`);
-      if ('anchor' in options && (type !== 'Opamp' || typeof options.anchor !== 'string')) throw new Error('anchor は現在 Opamp の端子名のみ対応しています。');
-      if ('drop' in options && (type !== 'BjtNpn' || typeof options.drop !== 'string')) throw new Error('drop は現在 BjtNpn の端子名のみ対応しています。');
-      if (('leads' in options && type !== 'Opamp') || ('lead' in options && type !== 'Ground')) throw new Error(`${type} ではそのコンストラクタ引数を使用できません。`);
-      if ('reverse' in options && !['SourceV', 'Zener'].includes(type)) throw new Error(`${type} の reverse には対応していません。`);
-      if ('flip' in options && type !== 'Zener') throw new Error(`${type} の flip には対応していません。`);
+      if (isMeter) {
+        const analog = type === 'MeterAnalog', digital = type === 'MeterDigital', scope = type === 'Oscilloscope';
+        const allowed = ['at', 'anchor', 'color', 'input_fill', 'width', 'corner', 'inputs', 'input_ofst', 'input_lw', 'input_rad',
+          ...(analog ? ['needle_percent', 'window_fill', 'needle_color', 'needle_width'] : []),
+          ...(digital || scope ? ['screen_fill', 'screen_lw'] : []),
+          ...(scope ? ['signal', 'signal_color', 'signal_lw', 'grid', 'grid_color', 'grid_lw'] : [])];
+        if (selectedDirection || Object.keys(options).some(key => !allowed.includes(key))) throw new Error(`The specified arguments are not supported for ${type}.`);
+        if ('at' in options) [x, y] = atPoint(options.at);
+        const numeric = (key, fallback, positive = false, scale = false) => {
+          if (options[key] === undefined) return fallback;
+          if (typeof options[key] !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options[key]) || !Number.isFinite(Number(options[key])) || (positive && Number(options[key]) <= 0)) throw new Error(`${key} must be a finite positive number.`);
+          return Number(options[key]) * (scale ? 36 : 1);
+        };
+        const boolOpt = (key, fallback) => {
+          if (!(key in options)) return fallback;
+          if (!['True', 'False'].includes(options[key])) throw new Error(`${key} must be True or False.`);
+          return options[key] === 'True';
+        };
+        const colorOpt = (key, fallback) => {
+          if (options[key] === undefined) return fallback;
+          if (options[key] === 'bg') return 'white';
+          return readColor(options[key]);
+        };
+        const W = numeric('width', 54, true, true), corner = numeric('corner', 7.2, true, true);
+        const inputs = boolOpt('inputs', true);
+        let inputOfst = [14.4, 10.8];
+        if ('input_ofst' in options) {
+          const m = /^\(\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s+([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*\)$/.exec(options.input_ofst);
+          if (!m) throw new Error('input_ofst must be specified as input_ofst="(x y)".');
+          inputOfst = [Number(m[1]) * 36, Number(m[2]) * 36];
+        }
+        const inputRad = numeric('input_rad', 3.6, true, true), inputLw = numeric('input_lw', 1, true);
+        const inputFill = colorOpt('input_fill', 'none');
+        const needle = numeric('needle_percent', 70);
+        if (needle < 0 || needle > 100) throw new Error('needle_percent must be between 0 and 100.');
+        const needleColor = colorOpt('needle_color', 'black'), needleWidth = numeric('needle_width', 1.5, true);
+        const windowFill = colorOpt('window_fill', 'none');
+        const screenFill = colorOpt('screen_fill', 'none'), screenLw = numeric('screen_lw', 1, true);
+        const gridOn = boolOpt('grid', true), gridColor = colorOpt('grid_color', '#666666'), gridLw = numeric('grid_lw', 0.3, true);
+        const signalWidth = numeric('signal_lw', 2, true), signalColor = colorOpt('signal_color', '#e0213b');
+        const signal = options.signal === undefined ? 'none' : options.signal;
+        if (!['none', 'sine', 'square', 'triangle'].includes(signal)) throw new Error(`Invalid signal: ${signal}`);
+        const anchors = {
+          N: [W / 2, -W], S: [W / 2, 0], E: [W, -W / 2], W: [0, -W / 2],
+          NE: [W, -W], SE: [W, 0], NW: [0, -W], SW: [0, 0],
+          in1: [inputOfst[0], -inputOfst[1]], in2: [W - inputOfst[0], -inputOfst[1]],
+          name: [W / 2, 0], xy: [0, 0]
+        };
+        if (digital) anchors.display = [W / 2, -(0.85 * W - W / 3)];
+        const definition = { anchors, defaultDrop: 'in2' };
+        const radians = typeof direction === 'number' ? direction * Math.PI / 180 : 0;
+        const [dx, dy, angle] = typeof direction === 'number' ? [Math.cos(radians), -Math.sin(radians), -direction] : directions[direction];
+        const placed = placeComponent(definition, [x, y], { direction: [dx, dy], anchor: options.anchor === undefined ? null : options.anchor });
+        const [ox, oy] = placed.transform(0, 0);
+        let shape = `<rect x="0" y="${-W}" width="${W}" height="${W}" rx="${corner}" ${stroke}/>`;
+        if (inputs) shape += `<circle cx="${inputOfst[0]}" cy="${-inputOfst[1]}" r="${inputRad}" fill="${inputFill}" stroke="${color}" stroke-width="${inputLw}"/><circle cx="${W - inputOfst[0]}" cy="${-inputOfst[1]}" r="${inputRad}" fill="${inputFill}" stroke="${color}" stroke-width="${inputLw}"/>`;
+        if (analog) {
+          const center = W / 2, arcy = 43.2, arcy2 = 30.96, arch = 7.2;
+          const a = (112 - 45 * needle / 100) * Math.PI / 180;
+          shape += `<path d="M ${center - W / 3},-${arcy} Q ${center},-${arcy + arch} ${center + W / 3},-${arcy} L ${center + W / 4},-${arcy2} Q ${center},-${arcy2 + arch * .7} ${center - W / 4},-${arcy2} Z" fill="${windowFill}" stroke="black" stroke-width="1"/>`;
+          shape += `<path d="M ${center + 33.84 * Math.cos(a)},${-33.84 * Math.sin(a)} L ${center + 43.2 * Math.cos(a)},${-43.2 * Math.sin(a)}" fill="none" stroke="${needleColor}" stroke-width="${needleWidth}"/>`;
+        }
+        if (digital) {
+          const wleft = W * .1, wright = W * .9, wtop = W * .85, wheight = W / 3;
+          shape += `<rect x="${wleft}" y="${-wtop}" width="${wright - wleft}" height="${wheight}" fill="${screenFill}" stroke="${color}" stroke-width="${screenLw}"/>`;
+        }
+        if (scope) {
+          const wleft = W * .15, wright = W * .85, wwidth = wright - wleft;
+          const grid = wwidth / 5, wheight = grid * 3, wtop = W * .9, wbot = wtop - wheight;
+          shape += `<rect x="${wleft}" y="${-wtop}" width="${wwidth}" height="${wheight}" fill="${screenFill}" stroke="${color}" stroke-width="${screenLw}"/>`;
+          if (gridOn) {
+            let gridPath = '';
+            for (let i = 1; i <= 4; i++) gridPath += `M ${wleft + i * grid},${-wtop} L ${wleft + i * grid},${-wbot} `;
+            for (let i = 1; i <= 2; i++) gridPath += `M ${wleft},${-(wbot + i * grid)} L ${wright},${-(wbot + i * grid)} `;
+            shape += `<path d="${gridPath}" fill="none" stroke="${gridColor}" stroke-width="${gridLw}"/>`;
+          }
+          const sbot = wbot + wheight / 4, stop = wtop - wheight / 4;
+          const e1 = wleft + wwidth / 3 - 3.6, e2 = wleft + wwidth * 2 / 3 - 3.6, e3 = wright - 3.6;
+          let pts = [];
+          if (signal === 'sine') pts = Array.from({ length: 20 }, (_, i) => [wleft + wwidth * i / 19, -(wbot + wheight / 2 + Math.sin(i / 19 * Math.PI * 2) * wheight / 2 * .75)]);
+          if (signal === 'square') pts = [[wleft, -sbot], [e1, -sbot], [e1, -stop], [e2, -stop], [e2, -sbot], [e3, -sbot], [e3, -stop], [wright, -stop]];
+          if (signal === 'triangle') pts = [[wleft, -sbot], [e1, -stop], [e2, -sbot], [e3, -stop], [wright, -(stop - 3.6)]];
+          if (pts.length) shape += `<path d="${pts.map(([px, py], i) => `${i ? 'L' : 'M'} ${px},${py}`).join(' ')}" fill="none" stroke="${signalColor}" stroke-width="${signalWidth}" stroke-linecap="round" stroke-linejoin="round"/>`;
+        }
+        elements.push(`<g transform="translate(${ox} ${oy}) rotate(${angle})">${shape}</g>`);
+        const margin = Math.max(2, signalWidth / 2);
+        for (const corner2 of [[0, 0], [W, 0], [0, -W], [W, -W]]) {
+          const [bx, by] = placed.transform(...corner2);
+          bounds(bx - margin, by - margin, bx + margin, by + margin);
+        }
+        for (const label of labels) {
+          if (label.items || label.halign != null || label.ofst != null || label.rotate !== undefined || !['name', 'in1', 'in2', 'display'].includes(label.loc) || !Object.prototype.hasOwnProperty.call(definition.anchors, label.loc)) throw new Error(`${type} label loc must be ${digital ? 'name, in1, in2, or display' : 'name, in1, or in2'}.`);
+          const [localX, localY] = definition.anchors[label.loc];
+          const size = label.fontsize === undefined ? (label.loc === 'display' ? (labelSizeSet ? labelSize : 11) : labelSize) : label.fontsize;
+          const [lx, ty] = placed.transform(localX, localY - (label.loc === 'in1' || label.loc === 'in2' ? inputRad + 3.6 : 3.6));
+          const width = Math.max(size, Array.from(label.text).length * size * .75);
+          bounds(lx - width / 2, ty - size * 1.2, lx + width / 2, ty + size * .3);
+          elements.push(`<text x="${lx}" y="${ty}" text-anchor="middle" dominant-baseline="auto" fill="${label.color || color}" font-family="sans-serif" font-size="${size}">${labelContent(label.text)}</text>`);
+        }
+        if (name) names[name] = placed.anchors;
+        [x, y] = placed.anchors[definition.defaultDrop];
+        log(`${type}: drop=in2`);
+        continue;
+      }
+      const oneTerminalType = ['Ground', 'GroundSignal', 'GroundChassis', 'Vdd', 'Vss', 'NoConnect'].includes(type);
+      // List labels are positioned by their own edge logic, so loc/ofst/halign
+      // are checked separately from the single-label rules below.
+      if (labels.some(label => label.items && label.loc != null && !['top', 'bot', 'bottom', 'left', 'right', 'center'].includes(label.loc))) throw new Error('List labels support loc top, bot, left, right, or center.');
+      // Two-terminal parts place labels with the schemdraw rules, so ofst,
+      // halign and valign are accepted there. Other elements keep the old limits.
+      const genericLabel = Object.prototype.hasOwnProperty.call(twoTerminalParts, type)
+        || ['BjtNpn2', 'BjtPnp2', 'BjtPnp2c2', 'NMos2', 'PMos2', 'NFet2', 'PFet2', 'JFetN2', 'JFetP2',
+          'Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE', 'Rshunt', 'SCR', 'Triac',
+          'Battery', 'BatteryCell', 'BatteryDouble', 'SourceI', 'Zener', 'LED', 'Diac'].includes(type);
+      if (labels.some(label => !label.items && (
+        ['start', 'end'].includes(label.loc)
+        || (['base', 'collector', 'emitter'].includes(label.loc) && !(componentDefinitions[type] && componentDefinitions[type].transistor))
+        || (type === 'Dot' && label.ofst != null && !Array.isArray(label.ofst))
+        || (label.valign != null && !genericLabel)
+        || (label.halign != null && !genericLabel && type !== 'Dot' && !oneTerminalType)
+        || (label.ofst != null && !genericLabel && type !== 'Dot' && !oneTerminalType)
+        || (label.rotate !== undefined && !(type === 'Resistor' && (!label.loc || label.loc === 'top')) && !oneTerminalType && !genericLabel)
+      ))) throw new Error(`The specified label arguments are not supported for ${type}.`);
+      const transistor = Boolean(componentDefinitions[type] && componentDefinitions[type].transistor);
+      if ('anchor' in options && typeof options.anchor !== 'string') throw new Error('anchor must specify a terminal name.');
+      if ('drop' in options && (!(transistor || logicGateTypes.has(type)) || typeof options.drop !== 'string')) throw new Error('drop must specify a terminal name.');
+      if (('leads' in options && type !== 'Opamp') || ('lead' in options && type !== 'Ground')) throw new Error(`That constructor argument cannot be used with ${type}.`);
+      const transistors = ['Bjt', 'JFet', 'Hemt', 'NpnSchottky', 'PnpSchottky', 'BjtNpn', 'BjtPnp', 'BjtPnp2c', 'BjtNpn2', 'BjtPnp2', 'BjtPnp2c2', 'IgbtN', 'IgbtP', 'NpnPhoto', 'PnpPhoto', 'AnalogNFet', 'AnalogPFet', 'AnalogBiasedFet', 'NMos2', 'PMos2', 'NFet2', 'PFet2', 'JFetN2', 'JFetP2', 'JFetN', 'JFetP', 'NFet', 'PFet', 'NMos', 'PMos'];
+      if ('reverse' in options && !['SourceV', 'SourceI', 'Zener', 'Potentiometer', 'Rshunt', 'SCR', 'Triac', 'Ground', 'GroundSignal', 'GroundChassis', 'Vdd', 'Vss', 'NoConnect', 'CurrentMirror', 'VoltageMirror', 'Breaker', 'Inductor2', 'CPE', 'Nullator', 'Norator', 'Memristor2', 'ResistorVar', 'Capacitor2', 'ResistorVarIEC', 'ResistorVarIEEE', 'PotentiometerIEC', 'PotentiometerIEEE', 'FuseIEC', 'FuseIEEE', 'DiodeTunnel', 'DiodeTVS', 'DiodeShockley', 'Josephson', 'Photoresistor', 'PhotoresistorBox', 'PhotoresistorIEC', 'PhotoresistorIEEE', 'Coax', 'Triax', 'Motor', 'BusLine', 'DataBusLine', ...transistors, ...Object.keys(twoTerminalParts), ...logicGateTypes, 'SwitchRotary', 'SwitchDIP', 'Antenna', 'AntennaLoop', 'AntennaLoop2', 'Speaker', 'Mic', 'AudioJack', "OutletA","OutletB","OutletC","OutletD","OutletE","OutletF","OutletG","OutletH","OutletI","OutletJ","OutletK","OutletL", 'Tag', 'Label', 'Arrowhead', 'DotDotDot'].includes(type)) throw new Error(`${type} does not support reverse.`);
+      if ('flip' in options && !['Zener', 'LED', 'Diac', 'Fuse', 'Battery', 'BatteryCell', 'BatteryDouble', 'SourceI', 'Potentiometer', 'Rshunt', 'SCR', 'Triac', 'Ground', 'GroundSignal', 'GroundChassis', 'Vdd', 'Vss', 'NoConnect', 'CurrentMirror', 'VoltageMirror', 'Breaker', 'Inductor2', 'CPE', 'Nullator', 'Norator', 'Memristor2', 'ResistorVar', 'Capacitor2', 'ResistorVarIEC', 'ResistorVarIEEE', 'PotentiometerIEC', 'PotentiometerIEEE', 'FuseIEC', 'FuseIEEE', 'DiodeTunnel', 'DiodeTVS', 'DiodeShockley', 'Josephson', 'Photoresistor', 'PhotoresistorBox', 'PhotoresistorIEC', 'PhotoresistorIEEE', 'Coax', 'Triax', 'Motor', 'BusLine', 'DataBusLine', ...transistors, ...Object.keys(twoTerminalParts), ...logicGateTypes, 'SwitchRotary', 'SwitchDIP', 'Antenna', 'AntennaLoop', 'AntennaLoop2', 'Speaker', 'Mic', 'AudioJack', "OutletA","OutletB","OutletC","OutletD","OutletE","OutletF","OutletG","OutletH","OutletI","OutletJ","OutletK","OutletL", 'Tag', 'Label', 'Arrowhead', 'DotDotDot'].includes(type)) throw new Error(`${type} does not support flip.`);
+      let zoom = 1;
+      if ('scale' in options) {
+        if (typeof options.scale !== 'string' || !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.scale) || !(Number(options.scale) > 0)) throw new Error('scale must be a finite positive number.');
+        zoom = Number(options.scale);
+      }
       let shift = 0;
       if ('shift' in options) {
-        if (['BjtNpn', 'Dot', 'Opamp', 'Ground'].includes(type)) throw new Error(`${type} の shift には対応していません。`);
-        if (typeof options.shift !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.shift) || !Number.isFinite(Number(options.shift))) throw new Error('shift は有限の数値で指定してください。');
+        if (['BjtNpn', 'Dot', 'Opamp', 'Ground'].includes(type)) throw new Error(`${type} does not support shift.`);
+        if (typeof options.shift !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.shift) || !Number.isFinite(Number(options.shift))) throw new Error('shift must be a finite number.');
         shift = Number(options.shift);
       }
+      let bulk = false;
+      if ('bulk' in options) {
+        if (!['NFet2', 'PFet2', 'NFet', 'PFet', 'AnalogNFet', 'AnalogPFet', 'AnalogBiasedFet'].includes(type)) throw new Error('bulk can only be specified for NFet/PFET-family components.');
+        if (!['True', 'False'].includes(options.bulk)) throw new Error('bulk must be True or False.');
+        bulk = options.bulk === 'True';
+      }
+      let circle = false;
+      if ('circle' in options) {
+        if (!['JFetN2', 'JFetP2', 'Bjt', 'JFet', 'NpnSchottky', 'PnpSchottky', 'BjtNpn', 'BjtPnp', 'BjtPnp2c', 'JFetN', 'JFetP', 'NMos', 'PMos', 'NMos2', 'PMos2'].includes(type)) throw new Error('circle can only be specified for BJT/JFET/MOSFET-family components.');
+        if (!['True', 'False'].includes(options.circle)) throw new Error('circle must be True or False.');
+        circle = options.circle === 'True';
+      }
+      let dots = true;
+      if ('dots' in options) {
+        if (type !== 'Breaker' && type !== 'AudioJack') throw new Error('dots can only be specified for Breaker.');
+        if (!['True', 'False'].includes(options.dots)) throw new Error('dots must be True or False.');
+        dots = options.dots === 'True';
+      }
+      // Switch-specific flags (Switch / SwitchSpdt).
+      if (['Switch', 'SwitchSpdt', 'SwitchSpdt2', 'SwitchDpst', 'SwitchDpdt'].includes(type)) {
+        for (const key of ['contacts', 'nc', 'link']) {
+          if (key in options && !['True', 'False'].includes(options[key])) throw new Error(`${key} must be True or False.`);
+        }
+        if ('nc' in options && type !== 'Switch') throw new Error('nc can only be specified for Switch.');
+        if ('action' in options && !['open', 'close'].includes(options.action)) throw new Error('action must be "open" or "close".');
+      }
+      let loops = 4, coreLines = 0;
+      if (type === 'Inductor2') {
+        const num = (key, fallback, allowZero = false) => {
+          if (!(key in options)) return fallback;
+          const value = Number(options[key]);
+          if (typeof options[key] !== 'string' || !/^\d+$/.test(options[key]) || !Number.isSafeInteger(value) || value < (allowZero ? 0 : 1) || value > 100) throw new Error(`${key} must be an integer within range.`);
+          return value;
+        };
+        loops = num('loops', 4);
+        coreLines = num('core', 0, true);
+      }
+      let polar = false;
+      if ('polar' in options) {
+        if (type !== 'Capacitor2' && type !== 'Capacitor') throw new Error('polar can only be specified for Capacitor or Capacitor2.');
+        if (!['True', 'False'].includes(options.polar)) throw new Error('polar must be True or False.');
+        polar = options.polar === 'True';
+      }
+      let josephsonBox = false;
+      if ('box' in options && type === 'Josephson') {
+        if (!['True', 'False'].includes(options.box)) throw new Error('box must be True or False.');
+        josephsonBox = options.box === 'True';
+      }
+      let coaxRadius = 10.8, coaxLead = 21.6;
+      if (type === 'Coax') {
+        const positive = (key, fallback) => {
+          if (!(key in options)) return fallback;
+          if (typeof options[key] !== 'string' || !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(options[key]) || !(Number(options[key]) > 0)) throw new Error(`${key} must be a positive number.`);
+          return Number(options[key]) * 36;
+        };
+        coaxRadius = positive('radius', 10.8);
+        coaxLead = positive('leadlen', 21.6);
+      }
+      let busLw = 4;
+      if (type === 'BusLine' && 'lw' in options) {
+        if (typeof options.lw !== 'string' || !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.lw) || !(Number(options.lw) > 0)) throw new Error('lw must be a positive number.');
+        busLw = Number(options.lw);
+      }
+      let tapH = 0.72 * 36;
+      if ('tap_length' in options) {
+        if (type !== 'Potentiometer' && type !== 'PotentiometerIEC' && type !== 'PotentiometerIEEE') throw new Error('tap_length can only be specified for Potentiometer, PotentiometerIEC, or PotentiometerIEEE.');
+        if (typeof options.tap_length !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.tap_length) || !(Number(options.tap_length) > 0) || !Number.isFinite(Number(options.tap_length) * 36)) throw new Error('tap_length must be a finite positive number.');
+        tapH = Number(options.tap_length) * 36;
+      }
+      // flip mirrors the local y axis, which matches Schemdraw's Element.flip().
+      const sy = 'flip' in options ? -1 : 1;
       if ('theta' in options) {
-        if (type === 'Opamp' || type === 'Ground' || type === 'Dot') throw new Error(`${type} の theta には対応していません。`);
-        if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta は有限の数値で指定してください。');
-        if (selectedDirection || 'endpoints' in options || 'to' in options || 'tox' in options || 'toy' in options) throw new Error('theta と方向・endpoints・to・tox・toy は同時に指定できません。');
+        if (type === 'Opamp' || type === 'Dot') throw new Error(`${type} does not support theta.`);
+        if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta must be a finite number.');
+        if (selectedDirection || 'endpoints' in options || 'to' in options || 'tox' in options || 'toy' in options) throw new Error('theta cannot be combined with a direction, endpoints, to, tox, or toy.');
       }
       if ('length' in options) {
-        if (length !== null) throw new Error('長さを複数指定できません。');
-        if (typeof options.length !== 'string') throw new Error('length の値を指定してください。');
+        if (length !== null) throw new Error('Only one length may be specified.');
+        if (typeof options.length !== 'string') throw new Error('A length value is required.');
         length = readLength(options.length, unit);
       }
-      if ('endpoints' in options && (['BjtNpn', 'Dot', 'Opamp', 'Ground'].includes(type) || selectedDirection || length !== null)) throw new Error(`${type} の endpoints と、この指定の組み合わせには対応していません。`);
+      if ('endpoints' in options && (['BjtNpn', 'Dot', 'Opamp', 'Ground'].includes(type) || selectedDirection || length !== null)) throw new Error(`${type} endpoints cannot be combined with the specified options.`);
       if ('at' in options) [x, y] = atPoint(options.at);
-      if (type === 'BjtNpn') {
-        if (length !== null || labels.length || 'to' in options || 'tox' in options || 'toy' in options || 'idot' in options || 'dot' in options || 'hold' in options) throw new Error('BjtNpn は現在 at、方向、theta、color、drop に対応しています。');
+      let definition = componentDefinitions[type];
+      if (definition && definition.analog) {
+        const bool = (key, fallback) => {
+          if (!(key in options)) return fallback;
+          if (!['True', 'False'].includes(options[key])) throw new Error(`${key} must be True or False.`);
+          return options[key] === 'True';
+        };
+        const bulk = bool('bulk', false), offsetGate = bool('offset_gate', true), sourceArrow = bool('source_arrow', true);
+        const gateY = offsetGate ? (type === 'AnalogPFet' ? 18 : 42) : 30;
+        const anchors = {
+          source: type === 'AnalogPFet' ? [0, 0] : [0, 60],
+          drain: type === 'AnalogPFet' ? [0, 60] : [0, 0],
+          gate: [33, gateY],
+          center: [0, 30],
+          xy: [0, 0]
+        };
+        if (bulk) anchors.bulk = [0, 30];
+        const segments = [
+          { path: 'M 0,0 L 0,15 L 15,15 L 15,45 L 0,45 L 0,60', filled: false },
+          { path: `M 18,18 L 18,42 M 18,${gateY} L 33,${gateY}`, filled: false }
+        ];
+        if (!bulk && sourceArrow) {
+          if (type === 'AnalogBiasedFet') {
+            segments.push({ circle: [4.5, 45, 2.25], filled: true });
+          } else if (type === 'AnalogPFet') {
+            segments.push({ path: 'M 0,15 L 6,15', filled: false });
+            segments.push({ path: 'M 13,15 L 6,19.5 L 6,10.5 Z', filled: true });
+          } else {
+            segments.push({ path: 'M 15,45 L 9,45', filled: false });
+            segments.push({ path: 'M 2,45 L 9,40.5 L 9,49.5 Z', filled: true });
+          }
+        }
+        if (bulk) {
+          if (type === 'AnalogPFet') {
+            segments.push({ path: 'M 15,30 L 9,30', filled: false });
+            segments.push({ path: 'M 2,30 L 9,25.5 L 9,34.5 Z', filled: true });
+          } else if (type === 'AnalogBiasedFet') {
+            segments.push({ path: 'M 0,30 L 15,30', filled: false });
+            segments.push({ circle: [10.5, 30, 2.25], filled: true });
+          } else {
+            segments.push({ path: 'M 0,30 L 6,30', filled: false });
+            segments.push({ path: 'M 13,30 L 6,34.5 L 6,25.5 Z', filled: true });
+          }
+        }
+        definition = { ...definition, anchors, segments, defaultDrop: type === 'AnalogPFet' ? 'drain' : 'source' };
+      }
+      if (definition && definition.transistor) {
+        const modes = ['at', 'anchor', 'theta', 'color', 'drop', 'flip', 'reverse',
+          ...(definition.analog ? ['bulk', 'offset_gate', 'source_arrow'] : []),
+          ...(['NMos', 'PMos'].includes(type) ? ['diode'] : []),
+          ...(['NFet', 'PFet'].includes(type) ? ['bulk'] : []),
+          ...(definition.extendable || ['BjtNpn', 'BjtPnp', 'BjtPnp2c', 'JFetN', 'JFetP', 'NMos', 'PMos'].includes(type) ? ['circle'] : []),
+          ...(definition.hemt ? ['split', 'source_arrow'] : [])];
+        if (length !== null || Object.keys(options).some(key => !modes.includes(key))) throw new Error(`${type} supports at, anchor, direction, theta, color, drop, flip, reverse, and terminal labels.`);
+        if ('anchor' in options && typeof options.anchor !== 'string') throw new Error('anchor must specify a terminal name.');
         if ('theta' in options) {
           const degrees = ((Number(options.theta) % 360) + 360) % 360;
           direction = ({ 0: 'right', 90: 'up', 180: 'left', 270: 'down' })[degrees] || Number(options.theta);
@@ -384,30 +3369,139 @@
         const arbitrary = typeof direction === 'number';
         const radians = arbitrary ? direction * Math.PI / 180 : 0;
         const [dx, dy, angle] = arbitrary ? [Math.cos(radians), -Math.sin(radians), -direction] : directions[direction];
-        const transform = (localX, localY) => [x + localX * dx - localY * dy, y + localX * dy + localY * dx];
-        const anchors = {
-          base: transform(0, 0), xy: transform(0, 0),
-          collector: transform(27.06, -25.08), emitter: transform(27.06, 25.08),
-          center: transform(27.06, 0)
-        };
-        const drop = options.drop === undefined ? 'collector' : options.drop;
-        if (!Object.prototype.hasOwnProperty.call(anchors, drop)) throw new Error(`不明な BjtNpn drop: ${drop}`);
-        elements.push(`<g transform="translate(${x} ${y}) rotate(${angle})"><path d="M 0,0 L 13.2,0 M 13.2,-13.2 L 13.2,13.2 M 13.2,-6.6 L 27.06,-18.48 L 27.06,-25.08 M 13.2,6.6 L 27.06,18.48 L 27.06,25.08 M 13.2,6.6 L 20.227,12.623" ${stroke}/><path d="M 25.541,17.178 L 17.884,15.356 L 22.57,9.89 Z" fill="${color}" stroke="${color}"/></g>`);
-        for (const corner of [[0, -25.08], [0, 25.08], [27.06, -25.08], [27.06, 25.08]]) {
-          const [bx, by] = transform(...corner);
-          bounds(bx - 2, by - 2, bx + 2, by + 2);
+        const anchorName = options.anchor === undefined ? null : options.anchor;
+        const { transform, anchors } = placeComponent(definition, [x, y], {
+          direction: [dx, dy],
+          anchor: anchorName,
+          flip: 'flip' in options,
+          reverse: 'reverse' in options
+        });
+        const drop = options.drop === undefined ? definition.defaultDrop : options.drop;
+        if (!Object.prototype.hasOwnProperty.call(anchors, drop)) throw new Error(`Unknown ${type} drop: ${drop}`);
+        // Schemdraw's xy anchor is the unreflected local origin moved by .anchor().
+        if (Object.prototype.hasOwnProperty.call(definition.anchors, 'xy')) {
+          const ax = anchorName === null ? 0 : definition.anchors[anchorName][0];
+          const ay = anchorName === null ? 0 : definition.anchors[anchorName][1];
+          anchors.xy = [x - dx * ax + dy * ay, y - dy * ax - dx * ay];
         }
-        if (name) names[name] = anchors;
+        // Schemdraw mirrors the glyph about the center anchor and aligns a named
+        // anchor to the insertion point before rotating; express that as an
+        // inner transform around the raw glyph.
+        const sx = 'reverse' in options ? -1 : 1, sy2 = 'flip' in options ? -1 : 1;
+        const anchorPoint = anchorName === null ? [0, 0] : definition.anchors[anchorName];
+        const bx = (sx === -1 ? 2 * definition.reverseCenter : 0) - sx * anchorPoint[0];
+        const by = -sy2 * anchorPoint[1];
+        const inner = (sx === 1 && sy2 === 1 && bx === 0 && by === 0) ? '' : ` transform="translate(${bx} ${by}) scale(${sx} ${sy2})"`;
+        // Optional enclosing circle, positioned exactly as Schemdraw does for
+        // each transistor family (values are in the glyph's screen coordinates).
+        const circleMap = {
+          Bjt: [19.8, 0, 19.8], BjtNpn: [19.8, 0, 19.8], BjtPnp: [19.8, 0, 19.8], BjtPnp2c: [19.8, 0, 19.8],
+          NpnSchottky: [19.8, 0, 19.8], PnpSchottky: [19.8, 0, 19.8],
+          JFet: [9, 24, 26.4], JFetN: [9, 24, 26.4], JFetP: [9, 24, 26.4],
+          NMos: [-3, 30, 21], PMos: [-3, 30, 21]
+        }[type];
+        const circleSeg = options.circle === 'True' && circleMap
+          ? `<circle cx="${circleMap[0]}" cy="${circleMap[1]}" r="${circleMap[2]}" fill="none" stroke="${color}" stroke-width="2"/>`
+          : '';
+        // HEMT glyph, ported from Schemdraw's `Hemt`: the gate bar is split or
+        // solid and the source lead carries a directional arrow.
+        let hemtSeg = circleSeg;
+        if (definition.hemt) {
+          const split = options.split === undefined || options.split === 'True';
+          const arrowMode = options.source_arrow === undefined ? true : options.source_arrow;
+          const gate = split
+            ? 'M 24,10.8 L 24,17.28 M 24,23.76 L 24,30.24 M 24,36.72 L 24,43.2'
+            : 'M 24,10.8 L 24,43.2';
+          hemtSeg = `<path d="M 0,0 L 0,15 L 24,15 ${gate} M 24,39 L 0,39 L 0,54" ${stroke}/>` +
+            `<path d="M 24,27 L 43.2,27" ${stroke}/>`;
+          if (arrowMode === '>' || arrowMode === '&gt;') {
+            hemtSeg += `<path d="M 0,39 L 15,39" ${stroke}/><path d="M 22,39 L 15,42.6 L 15,35.4 Z" fill="${color}"/>`;
+          } else if (arrowMode !== 'False') {
+            hemtSeg += `<path d="M 9,39 L 24,39" ${stroke}/><path d="M 2,39 L 9,35.4 L 9,42.6 Z" fill="${color}"/>`;
+          }
+        }
+        // `diode=True` on the vertical MOSFETs adds the body diode beside the
+        // channel (Schemdraw `_Mosfet`: u = 1/24 unit).
+        let diodeSeg = '';
+        if (options.diode === 'True' && (type === 'NMos' || type === 'PMos')) {
+          const d = 1;
+          diodeSeg = `<path d="M 0,${21 * d} L ${9 * d},${21 * d} L ${9 * d},${27 * d}" ${stroke}/>` +
+            `<path d="M ${6 * d},${27 * d} L ${12 * d},${27 * d}" ${stroke}/>` +
+            `<polygon points="${9 * d},${27 * d} ${6 * d},${33 * d} ${12 * d},${33 * d} " fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>` +
+            `<path d="M ${9 * d},${33 * d} L ${9 * d},${39 * d} L 0,${39 * d}" ${stroke}/>`;
+        }
+        // `bulk=True` on NFet/PFet adds the bulk lead with its arrowhead.
+        if (options.bulk === 'True' && (type === 'NFet' || type === 'PFet')) {
+          diodeSeg += `<path d="M 0,27 L 15,27" ${stroke}/>` +
+            `<path d="M 22,27 L 15,30.6 L 15,23.4 Z" fill="${color}"/>`;
+        }
+        elements.push(`<g transform="translate(${x} ${y}) rotate(${angle})"><g${inner}>${definition.hemt ? hemtSeg : renderPathSegments(definition.segments, color, stroke) + circleSeg + diodeSeg}</g></g>`);
+        const [ex1, ex2, ey1, ey2] = definition.extent;
+        for (const corner of [[ex1, ey1], [ex1, ey2], [ex2, ey1], [ex2, ey2]]) {
+          const [bx2, by2] = transform(...corner);
+          bounds(bx2 - 2, by2 - 2, bx2 + 2, by2 + 2);
+        }
+        // The optional circle extends past the bare glyph's extent.
+        if (options.circle === 'True' && circleMap) {
+          for (const [cx2, cy2] of [[circleMap[0] - circleMap[2], circleMap[1] - circleMap[2]],
+            [circleMap[0] + circleMap[2], circleMap[1] + circleMap[2]]]) {
+            const [bx2, by2] = transform(cx2, cy2);
+            bounds(bx2 - 2, by2 - 2, bx2 + 2, by2 + 2);
+          }
+        }
+        const labelPoints = definition.anchors;
+        // Top/bottom/left/right labels use the element's box on screen, so a
+        // rotated transistor still gets its label above or below as drawn.
+        const screenCorners = [[ex1, ey1], [ex1, ey2], [ex2, ey1], [ex2, ey2]].map(corner => transform(corner[0], corner[1]));
+        const screenX1 = Math.min(...screenCorners.map(c => c[0])), screenX2 = Math.max(...screenCorners.map(c => c[0]));
+        const screenY1 = Math.min(...screenCorners.map(c => c[1])), screenY2 = Math.max(...screenCorners.map(c => c[1]));
+        for (const label of labels) {
+          if (label.items) throw new Error(`${type} does not support list labels.`);
+          const loc = label.loc || 'top';
+          let lx, ly, anchor = 'middle', baseline = 'central', screenPlaced = false;
+          if (loc !== 'xy' && Object.prototype.hasOwnProperty.call(labelPoints, loc)) {
+            [lx, ly] = labelPoints[loc];
+            if (type === 'BjtNpn' || type === 'BjtPnp') {
+              if (loc === 'base') { lx -= 7; ly -= 3; anchor = 'end'; }
+              else if (loc === 'collector') { lx += 4; ly -= 3; anchor = 'start'; }
+              else if (loc === 'emitter') { lx += 4; ly += 3; anchor = 'start'; }
+              else { ly -= 19; baseline = 'ideographic'; }
+            } else if (type === 'BjtPnp2c' && loc === 'C2') {
+              lx += 7; anchor = 'start';
+            } else {
+              const [cx0, cy0] = labelPoints.center || [0, 0];
+              const vx = lx - cx0, vy = ly - cy0, len = Math.hypot(vx, vy) || 1;
+              lx += vx / len * 7; ly += vy / len * 7;
+            }
+          } else if (loc === 'top') { lx = (screenX1 + screenX2) / 2; ly = screenY1 - 7; baseline = 'ideographic'; screenPlaced = true; }
+          else if (loc === 'bot' || loc === 'bottom') { lx = (screenX1 + screenX2) / 2; ly = screenY2 + 21; baseline = 'hanging'; screenPlaced = true; }
+          else if (loc === 'left') { lx = screenX1 - 7; ly = (screenY1 + screenY2) / 2 + 5; anchor = 'end'; screenPlaced = true; }
+          else if (loc === 'right') { lx = screenX2 + 7; ly = (screenY1 + screenY2) / 2 + 5; anchor = 'start'; screenPlaced = true; }
+          else throw new Error(`Unsupported ${type} label loc: ${loc}`);
+          const [tx, ty] = screenPlaced ? [lx, ly] : transform(lx, ly);
+          const width = Math.max(12, Array.from(label.text).length * 10);
+          bounds(tx - (anchor === 'start' ? 0 : anchor === 'end' ? width : width / 2), ty - 18, tx + (anchor === 'end' ? 0 : anchor === 'start' ? width : width / 2), ty + 8);
+          elements.push(`<text x="${tx}" y="${ty}" text-anchor="${anchor}" dominant-baseline="${baseline}"${textFill} font-family="sans-serif" font-size="${labelSize}">${labelContent(label.text)}</text>`);
+        }
+        if (name) {
+          names[name] = anchors;
+          namedBoxes[name] = { ...elemBox };
+          namedTypes[name] = type;
+          namedDirs[name] = [dx, dy];
+          namedReversed[name] = 'reverse' in options;
+        }
         [x, y] = anchors[drop];
-        log(`BjtNpn: drop=${drop}`);
+        log(`${type}: drop=${drop}`);
         continue;
       }
       if (type === 'Dot') {
-        if (selectedDirection || length !== null || 'to' in options || 'tox' in options || 'toy' in options || 'idot' in options || 'dot' in options || 'hold' in options) throw new Error('Dot は現在 at、color、label に対応しています。');
-        elements.push(`<circle cx="${x}" cy="${y}" r="2.7" fill="${color}" stroke="${color}" stroke-width="2"/>`);
+        if (selectedDirection || length !== null || 'to' in options || 'tox' in options || 'toy' in options || 'idot' in options || 'dot' in options || 'hold' in options || 'anchor' in options) throw new Error('Dot currently supports at, color, and label.');
+        const dotOpen = options.open === 'True';
+        elements.push(`<circle cx="${x}" cy="${y}" r="${componentDefinitions.Dot.radius}" fill="${dotOpen ? 'white' : color}" stroke="${color}" stroke-width="2"/>`);
+        if (dotOpen) whiteMarker(x, y, componentDefinitions.Dot.radius, color);
         bounds(x - 3.7, y - 3.7, x + 3.7, y + 3.7);
         for (const label of labels) {
-          if (label.items) throw new Error('Dot のリストラベルには対応していません。');
+          if (label.items) throw new Error('Dot does not support list labels.');
           const loc = label.loc || 'top';
           const placement = {
             top: [0, -2.7, 0, -3.6, 'center', 'ideographic'],
@@ -415,70 +3509,690 @@
             left: [-2.7, 0, -3.6, 0, 'right', 'central'],
             right: [2.7, 0, 3.6, 0, 'left', 'central']
           }[loc];
-          if (!placement) throw new Error(`未対応の Dot label loc: ${loc}`);
+          if (!placement) throw new Error(`Unsupported Dot label loc: ${loc}`);
           const [bx, by, defaultX, defaultY, defaultAlign, baseline] = placement;
           const ox = label.ofst == null ? defaultX : label.ofst[0] * 36;
           const oy = label.ofst == null ? defaultY : -label.ofst[1] * 36;
           const lx = x + bx + ox, ly = y + by + oy;
-          if (!Number.isFinite(lx) || !Number.isFinite(ly)) throw new Error('Dot label の位置が大きすぎます。');
+          if (!Number.isFinite(lx) || !Number.isFinite(ly)) throw new Error('Dot label position is too large.');
           const align = label.halign || defaultAlign;
           const anchor = { left: 'start', center: 'middle', right: 'end' }[align];
           const visible = label.text.startsWith('$') && label.text.endsWith('$') ? label.text.replace(/[$_{}]/g, '') : label.text;
           const width = Math.max(12, Array.from(visible).length * 10);
           bounds(lx - (align === 'right' ? width : align === 'center' ? width / 2 : 0), ly - 18,
             lx + (align === 'left' ? width : align === 'center' ? width / 2 : 0), ly + 18);
-          elements.push(`<text x="${lx}" y="${ly - 14}" text-anchor="${anchor}" dominant-baseline="${baseline}"${textFill} font-family="sans-serif" font-size="14"><tspan x="${lx}" dy="14">${labelContent(label.text)}</tspan></text>`);
+          elements.push(`<text x="${lx}" y="${ly - labelSize}" text-anchor="${anchor}" dominant-baseline="${baseline}"${textFill} font-family="sans-serif" font-size="${labelSize}"><tspan x="${lx}" dy="${labelSize}">${labelContent(label.text)}</tspan></text>`);
         }
-        if (name) names[name] = { start: [x, y], center: [x, y], end: [x, y], xy: [x, y] };
+        if (name) names[name] = placeComponent(componentDefinitions.Dot, [x, y]).anchors;
+        // Schemdraw's Dot sets drop=(0,0) and theta=0: the cursor moves to the
+        // dot and the direction resets to right.
+        direction = 'right';
         log(`Dot: color=${color}`);
         continue;
       }
       if (type === 'Opamp') {
-        if (('leads' in options && !['True', 'False'].includes(options.leads)) || selectedDirection || labels.length || length !== null || 'to' in options || 'tox' in options || 'toy' in options || 'dot' in options || 'idot' in options) throw new Error('Opamp は leads=True/False、anchor、at、hold に対応しています。');
+        if (('leads' in options && !['True', 'False'].includes(options.leads)) || selectedDirection || labels.length || length !== null || 'to' in options || 'tox' in options || 'toy' in options || 'dot' in options || 'idot' in options) throw new Error('Opamp supports leads=True/False, anchor, at, and hold.');
         const width = 45 * Math.sqrt(3), lead = options.leads === 'True' ? 22.5 : 0;
+        const definition = componentDefinitions.Opamp(lead);
         if ('anchor' in options) {
-          // Local anchor positions relative to the default Opamp insertion point.
-          const offsets = { in1: [0, -22.5], in2: [0, 22.5], out: [width + 2 * lead, 0] };
-          if (!Object.prototype.hasOwnProperty.call(offsets, options.anchor)) throw new Error(`未対応の Opamp anchor: ${options.anchor}`);
-          x -= offsets[options.anchor][0];
-          y -= offsets[options.anchor][1];
+          if (!Object.prototype.hasOwnProperty.call(definition.anchors, options.anchor)) throw new Error(`Unsupported Opamp anchor: ${options.anchor}`);
         }
+        const placed = placeComponent(definition, [x, y], { anchor: options.anchor === undefined ? null : options.anchor });
+        [x, y] = placed.transform(0, 0);
         const bodyX = x + lead;
-        const anchors = { in1: [x, y - 22.5], in2: [x, y + 22.5], out: [bodyX + width + lead, y] };
+        const anchors = placed.anchors;
         const leads = lead ? ` M -22.5,-22.5 L 0,-22.5 M -22.5,22.5 L 0,22.5 M ${width},0 L ${width + lead},0` : '';
-        elements.push(`<g transform="translate(${bodyX} ${y})"><path d="M 0,-45 L ${width},0 L 0,45 Z${leads} M 6.143,-22.5 L 13.343,-22.5 M 6.143,22.5 L 13.343,22.5 M 9.743,18.9 L 9.743,26.1" ${stroke}/></g>`);
+        const sign = options.sign === 'False' ? '' : ' M 6.143,-22.5 L 13.343,-22.5 M 6.143,22.5 L 13.343,22.5 M 9.743,18.9 L 9.743,26.1';
+        elements.push(`<g transform="translate(${bodyX} ${y})"><path d="M 0,-45 L ${width},0 L 0,45 Z${leads}${sign}" ${stroke}/></g>`);
         bounds(x - 2, y - 47, bodyX + width + lead + 2, y + 47);
-        if (name) names[name] = anchors;
-        [x, y] = anchors.out;
+        if (name) {
+          names[name] = anchors;
+          namedBoxes[name] = { ...elemBox };
+        }
+        [x, y] = anchors[definition.defaultDrop];
         direction = 'right';
         if ('hold' in options) [x, y, direction] = previousState;
         log(`Opamp: leads=${lead ? 'True' : 'False'}`);
         continue;
       }
-      if (type === 'Ground') {
-        if (('lead' in options && !['True', 'False'].includes(options.lead)) || selectedDirection || length !== null || labels.length || 'to' in options || 'tox' in options || 'toy' in options || 'dot' in options || 'idot' in options) throw new Error('Ground は lead=True/False、at、hold に対応しています。');
-        const lead = options.lead === 'False' ? 0 : 14.4;
-        elements.push(`<g transform="translate(${x} ${y})"><path d="${lead ? 'M 0,0 L 0,14.4 ' : ''}M -9,${lead} L 9,${lead} M -6.3,${lead + 4.32} L 6.3,${lead + 4.32} M -1.8,${lead + 8.64} L 1.8,${lead + 8.64}" ${stroke}/></g>`);
-        bounds(x - 11, y - 2, x + 11, y + lead + 11);
-        if (name) names[name] = { start: [x, y] };
-        log(`Ground: lead=${lead ? 'True' : 'False'}`);
+      if (logicGateTypes.has(type)) {
+        const allowedGate = ['at', 'anchor', 'theta', 'color', 'drop', 'hold', 'flip', 'reverse'];
+        if (logicMultiInputTypes.has(type)) allowedGate.push('inputs', 'inputnots', 'leadin', 'leadout');
+        if (type === 'Tristate') allowedGate.push('outputnot', 'controlnot');
+        if (Object.keys(options).some(key => !allowedGate.includes(key)) || length !== null ||
+          ['to', 'tox', 'toy', 'endpoints'].some(key => key in options)) throw new Error(`${type} supports at, anchor, direction, theta, color, drop, hold, flip, reverse, and labels.`);
+        if ('anchor' in options && typeof options.anchor !== 'string') throw new Error('anchor must specify a terminal name.');
+        if ('drop' in options && typeof options.drop !== 'string') throw new Error('drop must specify a terminal name.');
+        if (labels.some(label => label.items)) throw new Error(`${type} does not support list labels.`);
+        if ('theta' in options) {
+          const degrees = ((Number(options.theta) % 360) + 360) % 360;
+          direction = ({ 0: 'right', 90: 'up', 180: 'left', 270: 'down' })[degrees] || Number(options.theta);
+        } else if (selectedDirection) direction = selectedDirection;
+        const arbitrary = typeof direction === 'number';
+        const radians = arbitrary ? direction * Math.PI / 180 : 0;
+        const [dx, dy, angle] = arbitrary ? [Math.cos(radians), -Math.sin(radians), -direction] : directions[direction];
+        const definition = buildLogicGate(type, options);
+        const anchorName = options.anchor === undefined ? null : options.anchor;
+        if (anchorName !== null && !Object.prototype.hasOwnProperty.call(definition.anchors, anchorName)) throw new Error(`Unsupported ${type} anchor: ${anchorName}`);
+        const placed = placeComponent(definition, [x, y], {
+          direction: [dx, dy],
+          anchor: anchorName,
+          flip: 'flip' in options,
+          reverse: 'reverse' in options
+        });
+        const sx = 'reverse' in options ? -1 : 1, sy2 = 'flip' in options ? -1 : 1;
+        const anchorPoint = anchorName === null ? [0, 0] : definition.anchors[anchorName];
+        const bx = (sx === -1 ? 2 * definition.reverseCenter : 0) - sx * anchorPoint[0];
+        const by = -sy2 * anchorPoint[1];
+        const inner = (sx === 1 && sy2 === 1 && bx === 0 && by === 0) ? '' : ` transform="translate(${bx} ${by}) scale(${sx} ${sy2})"`;
+        elements.push(`<g transform="translate(${x} ${y}) rotate(${angle})"><g${inner}>${renderPathSegments(definition.segments, color, stroke)}</g></g>`);
+        const [ex1, ex2, ey1, ey2] = definition.extent;
+        for (const corner of [[ex1, ey1], [ex1, ey2], [ex2, ey1], [ex2, ey2]]) {
+          const [gx, gy] = placed.transform(...corner);
+          bounds(gx - 2, gy - 2, gx + 2, gy + 2);
+        }
+        for (const label of labels) {
+          const loc = label.loc || 'top';
+          let lx, ly, anchor = 'middle', baseline = 'central';
+          if (Object.prototype.hasOwnProperty.call(definition.anchors, loc)) {
+            [lx, ly] = definition.anchors[loc];
+            if (/^in\d+$/.test(loc)) { lx -= 7; anchor = 'end'; }
+            else if (loc === 'out' || loc === 'end') { lx += 7; anchor = 'start'; }
+            else if (loc === 'c' || loc === 'cbar') { lx += 7; anchor = 'start'; }
+            else if (loc === 'start') { lx -= 7; anchor = 'end'; }
+          } else if (loc === 'top') { lx = (ex1 + ex2) / 2; ly = ey1 - 7; baseline = 'ideographic'; }
+          else if (loc === 'bot' || loc === 'bottom') { lx = (ex1 + ex2) / 2; ly = ey2 + 21; baseline = 'hanging'; }
+          else if (loc === 'left') { lx = ex1 - 7; ly = (ey1 + ey2) / 2 + 5; anchor = 'end'; }
+          else if (loc === 'right') { lx = ex2 + 7; ly = (ey1 + ey2) / 2 + 5; anchor = 'start'; }
+          else throw new Error(`Unsupported ${type} label loc: ${loc}`);
+          const [tx, ty] = placed.transform(lx, ly);
+          const width = Math.max(12, Array.from(label.text).length * 10);
+          bounds(tx - (anchor === 'start' ? 0 : anchor === 'end' ? width : width / 2), ty - 18,
+            tx + (anchor === 'end' ? 0 : anchor === 'start' ? width : width / 2), ty + 8);
+          elements.push(`<text x="${tx}" y="${ty}" text-anchor="${anchor}" dominant-baseline="${baseline}"${textFill} font-family="sans-serif" font-size="${labelSize}">${labelContent(label.text)}</text>`);
+        }
+        if (name) names[name] = placed.anchors;
+        const drop = options.drop === undefined ? definition.defaultDrop : options.drop;
+        if (!Object.prototype.hasOwnProperty.call(placed.anchors, drop)) throw new Error(`Unknown ${type} drop: ${drop}`);
+        [x, y] = placed.anchors[drop];
+        if ('hold' in options) [x, y, direction] = previousState;
+        log(`${type}: drop=${drop}`);
+        continue;
+      }
+      if (['Arrowhead', 'DotDotDot', 'Label', 'Tag'].includes(type)) {
+        // Annotation elements: they are drawn at the current point and never
+        // change it, except DotDotDot which advances by 2 units like Schemdraw.
+        const annotAllowed = ['at', 'color', 'hold', 'theta', 'flip', 'reverse',
+          ...(type === 'Arrowhead' ? ['headwidth', 'headlength'] : []),
+          ...(type === 'DotDotDot' ? ['radius', 'open'] : []),
+          ...(type === 'Tag' ? ['width', 'height'] : [])];
+        // A Tag may take a direction: schemdraw's `.left()` / `.right()` choose
+        // which way the pointer faces.
+        if ((selectedDirection && type !== 'Tag') || length !== null || Object.keys(options).some(key => !annotAllowed.includes(key))) throw new Error(`${type} supports at${type === 'Arrowhead' ? ', headwidth, headlength' : ''}${type === 'DotDotDot' ? ', radius, open' : ''}${type === 'Tag' ? ', width, height, direction' : ''}, color, hold, theta, flip, reverse, and labels.`);
+        const tagLeft = type === 'Tag' && selectedDirection === 'left';
+        const num = (key, fallback, positive = true) => {
+          if (!(key in options)) return fallback * 36;
+          if (typeof options[key] !== 'string' || !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(options[key]) || !(Number(options[key]) > 0)) throw new Error(`${key} must be a positive number.`);
+          return Number(options[key]) * 36;
+        };
+        const boolOpt = (key, fallback) => {
+          if (!(key in options)) return fallback;
+          if (!['True', 'False'].includes(options[key])) throw new Error(`${key} must be True or False.`);
+          return options[key] === 'True';
+        };
+        if ('at' in options) [x, y] = atPoint(options.at);
+        let theta = 0;
+        if ('theta' in options) {
+          if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta must be a finite number.');
+          theta = Number(options.theta);
+        }
+        const sx = ('reverse' in options && type !== 'Tag') ? -1 : 1, sy2 = 'flip' in options ? -1 : 1;
+        const tf = `translate(${x} ${y})` + (theta ? ` rotate(${-theta})` : '') + ((sx !== 1 || sy2 !== 1) ? ` scale(${sx} ${sy2})` : '');
+        let body = '';
+        if (type === 'Arrowhead') {
+          const hw = num('headwidth', 0.15), hl = num('headlength', 0.25);
+          // Schemdraw's Segment((-headlength,0) → (0,0), arrow='->') collapses to
+          // a bare head: tip 2 px short of the anchor, base one headlength back.
+          body = `<path d="M -2,0 L ${(-hl).toFixed(3)},${(hw / 2).toFixed(3)} L ${(-hl).toFixed(3)},${(-hw / 2).toFixed(3)} Z" fill="${color}"/>`;
+        } else if (type === 'DotDotDot') {
+          const r = num('radius', 0.075), openDot = boolOpt('open', false);
+          body = [0.5, 1, 1.5].map(c => `<circle cx="${(c * 36).toFixed(3)}" cy="0" r="${r.toFixed(3)}" fill="${openDot ? 'white' : color}" stroke="${color}" stroke-width="2"/>`).join('');
+          // Open dots must not be crossed by later wires: redraw them on top.
+          if (openDot) {
+            const toWorld = localToWorld(x, y, sx, sy2, theta);
+            for (const c of [0.5, 1, 1.5]) {
+              const [wx, wy] = toWorld(c * 36, 0);
+              whiteMarker(wx, wy, r, color);
+            }
+          }
+        } else if (type === 'Tag') {
+          const w = num('width', 1.5), h = num('height', 0.625) / 2;
+          // Schemdraw draws the tag from the anchor (0,0) to +w; `left` rotates
+          // it 180 degrees and `reverse` mirrors it about the body centre.
+          const s = tagLeft ? -1 : 1;
+          const rev = 'reverse' in options;
+          const tip = rev ? s * w : 0;
+          const base = rev ? s * (w - h) : s * h;
+          const far = rev ? 0 : s * w;
+          body = `<polygon points="${tip.toFixed(3)},0 ${base.toFixed(3)},${(-h).toFixed(3)} ${far.toFixed(3)},${(-h).toFixed(3)} ${far.toFixed(3)},${h.toFixed(3)} ${base.toFixed(3)},${h.toFixed(3)}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>`;
+        }
+        if (body) elements.push(`<g transform="${tf}">${body}</g>`);
+        for (const label of labels) {
+          if (label.items || label.halign != null || label.ofst != null) throw new Error(`${type} does not support label arguments.`);
+          const loc = label.loc || 'center';
+          const size = label.fontsize === undefined ? (type === 'Tag' && !labelSizeSet ? 12 : labelSize) : label.fontsize;
+          let lx = x, ly = y;
+          if (loc === 'center') {
+            // The body centre is the same whether or not it is mirrored.
+            lx = x + (type === 'Tag' ? (tagLeft ? -1 : 1) * num('width', 1.5) / 2 : 0);
+          }
+          else if (loc === 'top') ly = y - (type === 'Tag' ? 18 : 10);
+          else if (loc === 'bot' || loc === 'bottom') ly = y + (type === 'Tag' ? 18 : 10);
+          else if (loc === 'left') lx = x - (type === 'Tag' ? 8 : 6);
+          else if (loc === 'right') lx = x + (type === 'Tag' ? num('width', 1.5) + 8 : 6);
+          else throw new Error(`Unsupported ${type} label loc: ${loc}`);
+          const anchor = loc === 'left' ? 'end' : loc === 'right' ? 'start' : 'middle';
+          const width = Math.max(size, Array.from(label.text).length * size * 0.75);
+          bounds(lx - width, ly - size, lx + width, ly + size);
+          elements.push(`<text x="${lx}" y="${ly}" text-anchor="${anchor}" dominant-baseline="central" fill="${label.color || color}" font-family="sans-serif" font-size="${size}">${labelContent(label.text)}</text>`);
+        }
+        if (type === 'Tag') bounds(x - 4, y - 14, x + num('width', 1.5) + 4, y + 14);
+        else if (type === 'Arrowhead') bounds(x - 12, y - 6, x + 4, y + 6);
+        else if (type === 'DotDotDot') bounds(x + 12, y - 6, x + 60, y + 6);
+        if (name) names[name] = { start: [x, y], center: [x, y], end: [x, y], xy: [x, y] };
+        // DotDotDot's drop is (2, 0); the other annotation elements keep place.
+        if (type === 'DotDotDot') { x += sx * 2 * 36; }
+        log(`${type}: at (${x / 36}, ${-y / 36})`);
         if ('hold' in options) [x, y, direction] = previousState;
         continue;
       }
-      if (['to', 'tox', 'toy'].filter(key => key in options).length > 1) throw new Error('to、tox、toy は同時に指定できません。');
-      if ((selectedDirection || length !== null) && ('to' in options || 'tox' in options || 'toy' in options)) throw new Error('方向・長さと to/tox/toy の同時指定には対応していません。');
+      if (/^Outlet[A-L]$/.test(type)) {
+        if (selectedDirection || length !== null || Object.keys(options).some(key => !['at', 'color', 'hold', 'theta', 'flip', 'reverse', 'plug'].includes(key))) throw new Error(`${type} supports at, color, hold, theta, flip, reverse, plug, and labels.`);
+        const plug = 'plug' in options ? (options.plug === 'True' ? true : options.plug === 'False' ? false : (() => { throw new Error('plug must be True or False.'); })()) : false;
+        if ('at' in options) [x, y] = atPoint(options.at);
+        let theta = 0;
+        if ('theta' in options) {
+          if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta must be a finite number.');
+          theta = Number(options.theta);
+        }
+        const sx = 'reverse' in options ? -1 : 1, sy2 = 'flip' in options ? -1 : 1;
+        const def = buildOutlet(type, plug);
+        const P = 36;
+        let glyph = '';
+        for (const seg of def.segments) {
+          const f = seg.fill === undefined ? 'none' : (seg.fill === 'black' ? color : 'white');
+          if (seg.type === 'circle') {
+            glyph += `<circle cx="${(seg.c[0] * P).toFixed(4)}" cy="${(-seg.c[1] * P).toFixed(4)}" r="${(seg.r * P).toFixed(4)}" fill="${f}" stroke="${color}" stroke-width="2"/>`;
+          } else if (seg.type === 'poly') {
+            const pts = seg.verts.map(([vx, vy]) => `${(vx * P).toFixed(3)},${(-vy * P).toFixed(3)}`).join(' ');
+            glyph += `<polygon points="${pts} " style="stroke:${color};fill:${f};stroke-width:2;stroke-linecap:round;stroke-linejoin:round;"/>`;
+          } else {
+            glyph += `<path d="${seg.verts.map(([vx, vy], i) => `${i ? 'L' : 'M'} ${(vx * P).toFixed(4)},${(-vy * P).toFixed(4)}`).join(' ')} Z" fill="${f}" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>`;
+          }
+        }
+        const tf = `translate(${x} ${y})` + (theta ? ` rotate(${-theta})` : '') + ((sx !== 1 || sy2 !== 1) ? ` scale(${sx} ${sy2})` : '');
+        elements.push(`<g transform="${tf}">${glyph}</g>`);
+        for (const label of labels) {
+          if (label.items || label.halign != null || label.ofst != null || label.rotate !== undefined) throw new Error(`${type} does not support label arguments.`);
+          const loc = label.loc || 'top';
+          let lx = x, ly = y;
+          if (loc === 'top') ly = y - 58;
+          else if (loc === 'bot' || loc === 'bottom') ly = y + 58;
+          else if (loc === 'left') lx = x - 60;
+          else if (loc === 'right') lx = x + 60;
+          else throw new Error(`Unsupported ${type} label loc: ${loc}`);
+          const anchor = loc === 'left' ? 'end' : loc === 'right' ? 'start' : 'middle';
+          const width = Math.max(12, Array.from(label.text).length * 10);
+          bounds(lx - width, ly - 18, lx + width, ly + 8);
+          elements.push(`<text x="${lx}" y="${ly}" text-anchor="${anchor}"${textFill} font-family="sans-serif" font-size="${labelSize}">${labelContent(label.text)}</text>`);
+        }
+        const span = type === 'OutletA' || type === 'OutletB' ? 56 : 48;
+        bounds(x - span, y - span, x + span, y + span);
+        if (name) {
+          const out = Object.create(null);
+          for (const key of Object.keys(def.anchors)) out[key] = [x + sx * def.anchors[key][0] * P, y - sy2 * def.anchors[key][1] * P];
+          out.start = [x, y]; out.center = [x, y]; out.end = [x, y]; out.xy = [x, y];
+          names[name] = out;
+        }
+        log(`${type}: at (${x / 36}, ${-y / 36})`);
+        if ('hold' in options) [x, y, direction] = previousState;
+        continue;
+      }
+      if (type === 'AudioJack') {
+        // Faithful port of Schemdraw's `misc.AudioJack`: the same local variables
+        // (length/ringlen/tiplen/sleeveheight/…) drive the geometry, and the
+        // anchors are reported in drawing units as Schemdraw does.
+        if (selectedDirection || length !== null || Object.keys(options).some(key => !['at', 'color', 'hold', 'theta', 'flip', 'reverse', 'ring', 'switch', 'ringswitch', 'dots', 'open', 'radius'].includes(key))) throw new Error('AudioJack supports at, color, hold, theta, flip, reverse, ring, switch, ringswitch, dots, open, radius, and labels.');
+        const jackBool = (key, fallback) => {
+          if (!(key in options)) return fallback;
+          if (!['True', 'False'].includes(options[key])) throw new Error(`${key} must be True or False.`);
+          return options[key] === 'True';
+        };
+        const ring = jackBool('ring', false), ringSwitch = jackBool('ringswitch', false), dots = jackBool('dots', true), sw = jackBool('switch', false);
+        const openJack = jackBool('open', true);
+        let r = 0.075;
+        if ('radius' in options) {
+          if (typeof options.radius !== 'string' || !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.radius) || !(Number(options.radius) > 0)) throw new Error('radius must be a positive number.');
+          r = Number(options.radius);
+        }
+        if ('at' in options) [x, y] = atPoint(options.at);
+        let theta = 0;
+        if ('theta' in options) {
+          if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta must be a finite number.');
+          theta = Number(options.theta);
+        }
+        const P = 36, fill = openJack ? 'white' : 'none';
+        const len = 2.0, ringlen = .75, tiplen = .55, swidth = .2, sleeveheight = 1.0;
+        let tipy = 1.0, ringy = .1, sleevey = .35;
+        const swdy = .4, swlen = .5;
+        if (sw) tipy += .2;
+        if (ring && ringSwitch) { sleevey += .2; ringy -= .2; }
+        const u = v => v * P;
+        const jackDot = (cy, color) => dots ? `<circle cx="0" cy="${(-u(cy)).toFixed(4)}" r="${u(r).toFixed(4)}" fill="${fill}" stroke="${color}" stroke-width="2"/>` : '';
+        const jackAnchors = {};
+        let glyph = '';
+        if (ring) {
+          glyph += jackDot(-sleevey, color);
+          glyph += `<path d="M ${u(-r).toFixed(4)},${(-u(-sleevey)).toFixed(4)} L ${u(-len).toFixed(4)},${(-u(-sleevey)).toFixed(4)} L ${u(-len).toFixed(4)},0 L ${u(-len).toFixed(4)},${(-u(sleeveheight)).toFixed(4)} L ${u(-len - swidth).toFixed(4)},${(-u(sleeveheight)).toFixed(4)} L ${u(-len - swidth).toFixed(4)},0 L ${u(-len).toFixed(4)},0" ${stroke}/>`;
+          jackAnchors.sleeve = [0, -sleevey];
+          glyph += jackDot(ringy, color);
+          glyph += `<path d="M ${u(-r).toFixed(4)},${(-u(ringy)).toFixed(4)} L ${u(-len * .75).toFixed(4)},${(-u(ringy)).toFixed(4)} L ${u(-len * ringlen - 2 * r).toFixed(4)},${(-u(ringy + 2 * r)).toFixed(4)} L ${u(-len * ringlen - r * 4).toFixed(4)},${(-u(ringy)).toFixed(4)}" ${stroke}/>`;
+          jackAnchors.ring = [0, ringy];
+        } else {
+          glyph += jackDot(0, color);
+          glyph += `<path d="M ${u(-r).toFixed(4)},0 L ${u(-len).toFixed(4)},0 L ${u(-len).toFixed(4)},${(-u(sleeveheight)).toFixed(4)} L ${u(-len + swidth).toFixed(4)},${(-u(sleeveheight)).toFixed(4)} L ${u(-len + swidth).toFixed(4)},0" ${stroke}/>`;
+          jackAnchors.sleeve = [0, 0];
+        }
+        glyph += jackDot(tipy, color);
+        glyph += `<path d="M ${u(-r).toFixed(4)},${(-u(tipy)).toFixed(4)} L ${u(-len * .55).toFixed(4)},${(-u(tipy)).toFixed(4)} L ${u(-len * tiplen - 2 * r).toFixed(4)},${(-u(tipy - 2 * r)).toFixed(4)} L ${u(-len * tiplen - r * 4).toFixed(4)},${(-u(tipy)).toFixed(4)}" ${stroke}/>`;
+        jackAnchors.tip = [0, tipy];
+        const hx0 = u(-swlen);
+        // The switch connector's arrow is Schemdraw's `Segment(..., arrow='->')`;
+        // segmentArrow() renders it with the backend's own maths.
+        const arrowStem = (hx, yFrom, yTo) => segmentArrow(hx, -u(yFrom), hx, -u(yTo), color, stroke);
+        if (sw) {
+          glyph += jackDot(tipy - swdy, color);
+          glyph += `<path d="M 0,${(-u(tipy - swdy)).toFixed(4)} L ${u(-swlen).toFixed(4)},${(-u(tipy - swdy)).toFixed(4)}" ${stroke}/>`;
+          glyph += arrowStem(hx0, tipy - swdy, tipy);
+          jackAnchors.tipswitch = [0, tipy - swdy];
+        }
+        if (ring && ringSwitch) {
+          glyph += jackDot(ringy + swdy, color);
+          glyph += `<path d="M 0,${(-u(ringy + swdy)).toFixed(4)} L ${u(-swlen).toFixed(4)},${(-u(ringy + swdy)).toFixed(4)}" ${stroke}/>`;
+          glyph += arrowStem(hx0, ringy + swdy, ringy);
+          jackAnchors.ringswitch = [0, ringy + swdy];
+        }
+        const sx = 'reverse' in options ? -1 : 1, sy2 = 'flip' in options ? -1 : 1;
+        const tf = `translate(${x} ${y})` + (theta ? ` rotate(${-theta})` : '') + ((sx !== 1 || sy2 !== 1) ? ` scale(${sx} ${sy2})` : '');
+        elements.push(`<g transform="${tf}">${glyph}</g>`);
+        // The white contact dots must sit above leads drawn afterwards.
+        if (dots && fill === 'white') {
+          const toWorld = localToWorld(x, y, sx, sy2, theta);
+          for (const key of Object.keys(jackAnchors)) {
+            const [wx, wy] = toWorld(jackAnchors[key][0] * P, -jackAnchors[key][1] * P);
+            whiteMarker(wx, wy, r * P, color);
+          }
+        }
+        for (const label of labels) {
+          if (label.items || label.halign != null || label.ofst != null || label.rotate !== undefined) throw new Error('AudioJack does not support label arguments.');
+          const loc = label.loc || 'top';
+          let lx = x - 36, ly = y;
+          if (loc === 'top') { ly = y - 56; }
+          else if (loc === 'bot' || loc === 'bottom') { ly = y + 52; }
+          else if (loc === 'left') { lx = x - 90; }
+          else if (loc === 'right') { lx = x + 20; }
+          else throw new Error(`Unsupported AudioJack label loc: ${loc}`);
+          const anchor = loc === 'left' ? 'end' : loc === 'right' ? 'start' : 'middle';
+          const width = Math.max(12, Array.from(label.text).length * 10);
+          bounds(lx - width, ly - 18, lx + width, ly + 8);
+          elements.push(`<text x="${lx}" y="${ly}" text-anchor="${anchor}"${textFill} font-family="sans-serif" font-size="${labelSize}">${labelContent(label.text)}</text>`);
+        }
+        bounds(x - 84, y - (ring && ringSwitch ? 96 : 60), x + 18, y + 18);
+        if (name) {
+          const out = Object.create(null);
+          for (const key of Object.keys(jackAnchors)) out[key] = [x + jackAnchors[key][0] * P, y - jackAnchors[key][1] * P];
+          out.start = [x, y]; out.center = [x, y]; out.end = [x, y]; out.xy = [x, y];
+          names[name] = out;
+        }
+        log(`AudioJack: at (${x / 36}, ${-y / 36})`);
+        if ('hold' in options) [x, y, direction] = previousState;
+        continue;
+      }
+      if (type === 'Speaker' || type === 'Mic') {
+        // Two-input audio symbols (Schemdraw `misc.Speaker` / `Mic`). Both use a
+        // 0.25-unit body with a 0.5-unit lead spacing; the glyph is written in
+        // Schemdraw's default frame with radius/height = 0.25 (9 px).
+        if (selectedDirection || length !== null || Object.keys(options).some(key => !['at', 'color', 'hold', 'theta', 'flip', 'reverse'].includes(key))) throw new Error(`${type} supports at, color, hold, theta, flip, reverse, and labels.`);
+        if ('at' in options) [x, y] = atPoint(options.at);
+        let theta = 0;
+        if ('theta' in options) {
+          if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta must be a finite number.');
+          theta = Number(options.theta);
+        }
+        const sx = 'reverse' in options ? -1 : 1, sy2 = 'flip' in options ? -1 : 1;
+        // Ported from schemdraw/elements/misc.py with its own constants:
+        // resheight = 0.25 unit (9 px), sph = 0.5 unit (18 px).
+        const P = 36, rh = 0.25 * P, sph = 0.5 * P;
+        let glyph;
+        if (type === 'Speaker') {
+          glyph = `<path d="M 0,0 L ${rh},0 M 0,${sph} L ${rh},${sph}" ${stroke}/>` +
+            `<polygon points="${rh},${-sph / 2} ${rh},${sph * 1.5} ${rh * 2},${sph * 1.5} ${rh * 2},${-sph / 2}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>` +
+            `<polyline points="${rh * 2},${-sph / 2} ${rh * 3.5},${-sph * 1.25} ${rh * 3.5},${sph * 2.25} ${rh * 2},${sph * 1.5}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>`;
+        } else {
+          // Mic: two leads, a vertical flat, and a half circle of radius 4·resheight.
+          glyph = `<path d="M 0,0 L ${rh},0 M 0,${sph} L ${rh},${sph}" ${stroke}/>` +
+            `<path d="M ${-rh * 2},${-rh} L ${-rh * 2},${rh * 3}" ${stroke}/>` +
+            `<path d="M ${-rh * 2},${-rh} a ${rh * 2} ${rh * 2} 0 1 1 0 ${rh * 4}" ${stroke}/>`;
+        }
+        const tf = `translate(${x} ${y})` + (theta ? ` rotate(${-theta})` : '') + ((sx !== 1 || sy2 !== 1) ? ` scale(${sx} ${sy2})` : '');
+        elements.push(`<g transform="${tf}">${glyph}</g>`);
+        for (const label of labels) {
+          if (label.items || label.halign != null || label.ofst != null || label.rotate !== undefined) throw new Error(`${type} does not support label arguments.`);
+          const loc = label.loc || 'top';
+          let lx = x, ly = y;
+          if (loc === 'top') ly = y - 30;
+          else if (loc === 'bot' || loc === 'bottom') ly = y + 30;
+          else if (loc === 'left') lx = x - 30;
+          else if (loc === 'right') lx = x + 40;
+          else throw new Error(`Unsupported ${type} label loc: ${loc}`);
+          const anchor = loc === 'left' ? 'end' : loc === 'right' ? 'start' : 'middle';
+          const width = Math.max(12, Array.from(label.text).length * 10);
+          bounds(lx - width, ly - 18, lx + width, ly + 8);
+          elements.push(`<text x="${lx}" y="${ly}" text-anchor="${anchor}"${textFill} font-family="sans-serif" font-size="${labelSize}">${labelContent(label.text)}</text>`);
+        }
+        bounds(x - 24, y - 28, x + 36, y + 44);
+        if (name) names[name] = { in1: [x, y], in2: [x, y + 18], start: [x, y], center: [x, y], end: [x, y], xy: [x, y] };
+        log(`${type}: at (${x / 36}, ${-y / 36})`);
+        if ('hold' in options) [x, y, direction] = previousState;
+        continue;
+      }
+      if (['Antenna', 'AntennaLoop', 'AntennaLoop2'].includes(type)) {
+        // One-terminal symbols placed at the current point; they never change it.
+        if (selectedDirection || length !== null || Object.keys(options).some(key => !['at', 'color', 'hold', 'theta', 'flip', 'reverse'].includes(key))) throw new Error(`${type} supports at, color, hold, theta, flip, reverse, and labels.`);
+        if ('at' in options) [x, y] = atPoint(options.at);
+        const glyph = {
+          Antenna: 'M 0,0 L 0,-21.6 L -13.68,-43.2 L 13.68,-43.2 L 0,-21.6',
+          AntennaLoop: 'M 0,0 L 0,-7.2 L -18,-25.2 L 3.6,-46.8 L 25.2,-25.2 L 7.2,-7.2 L 7.2,0',
+          AntennaLoop2: 'M 0,0 L 0,-9 L -22.5,-9 L -22.5,-54 L 22.5,-54 L 22.5,-18 L -13.5,-18 L -13.5,-63 L 31.5,-63 L 31.5,-9 L 9,-9 L 9,0'
+        }[type];
+        let theta = 0;
+        if ('theta' in options) {
+          if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta must be a finite number.');
+          theta = Number(options.theta);
+        }
+        const sx = 'reverse' in options ? -1 : 1, sy2 = 'flip' in options ? -1 : 1;
+        const tf = `translate(${x} ${y})` + (theta ? ` rotate(${-theta})` : '') + ((sx !== 1 || sy2 !== 1) ? ` scale(${sx} ${sy2})` : '');
+        elements.push(`<g transform="${tf}"><path d="${glyph}" ${stroke}/></g>`);
+        for (const label of labels) {
+          if (label.items || label.halign != null || label.ofst != null || label.rotate !== undefined) throw new Error(`${type} does not support label arguments.`);
+          const loc = label.loc || 'top';
+          let lx = x, ly = y;
+          if (loc === 'top') { ly = y - 52; }
+          else if (loc === 'bot' || loc === 'bottom') { ly = y + 20; }
+          else if (loc === 'left') { lx = x - 26; }
+          else if (loc === 'right') { lx = x + 26; }
+          else throw new Error(`Unsupported ${type} label loc: ${loc}`);
+          const anchor = loc === 'left' ? 'end' : loc === 'right' ? 'start' : 'middle';
+          const width = Math.max(12, Array.from(label.text).length * 10);
+          bounds(lx - width, ly - 18, lx + width, ly + 8);
+          elements.push(`<text x="${lx}" y="${ly}" text-anchor="${anchor}"${textFill} font-family="sans-serif" font-size="${labelSize}">${labelContent(label.text)}</text>`);
+        }
+        bounds(x - (type === 'AntennaLoop2' ? 32 : 26), y - (type === 'AntennaLoop2' ? 66 : 48), x + (type === 'AntennaLoop2' ? 32 : 26), y + 4);
+        if (name) names[name] = { start: [x, y], center: [x, y], end: [x, y], xy: [x, y] };
+        log(`${type}: at (${x / 36}, ${-y / 36})`);
+        if ('hold' in options) [x, y, direction] = previousState;
+        continue;
+      }
+      if (['Ground', 'GroundSignal', 'GroundChassis', 'Vdd', 'Vss', 'NoConnect'].includes(type)) {
+        if (selectedDirection || length !== null || Object.keys(options).some(key => !['at', 'color', 'hold', 'theta', 'flip', 'reverse', 'lead'].includes(key))) throw new Error(`${type} supports at, color, hold, theta, flip, reverse, and label.`);
+        if (labels.some(label => label.loc != null && !['top', 'bot', 'bottom'].includes(label.loc))) throw new Error(`${type} label loc must be top or bot.`);
+        if ('lead' in options && type !== 'Ground') throw new Error(`lead cannot be used with ${type}.`);
+        if ('lead' in options && !['True', 'False'].includes(options.lead)) throw new Error('lead must be True or False.');
+        const lead = type === 'Ground' && options.lead !== 'False' ? 14.4 : 0;
+        let body;
+        if (type === 'Ground') body = `${lead ? 'M 0,0 L 0,14.4 ' : ''}M -9,${lead} L 9,${lead} M -6.3,${lead + 4.32} L 6.3,${lead + 4.32} M -1.8,${lead + 8.64} L 1.8,${lead + 8.64}`;
+        else if (type === 'GroundSignal') body = 'M 0,0 L 0,14.4 L -9,14.4 L 0,23.4 L 9,14.4 L 0,14.4';
+        else if (type === 'GroundChassis') body = 'M 0,0 L 0,14.4 L -6.75,23.4 M 0,14.4 L -6.75,14.4 L -13.5,23.4 M 0,14.4 L 6.75,14.4 L 0,23.4';
+        else if (type === 'Vdd') body = 'M 0,0 L 0,-14.4 M 0,-14.4 L -6.75,-14.4 M 0,-14.4 L 6.75,-14.4';
+        else if (type === 'Vss') body = 'M 0,0 L 0,14.4 M 0,14.4 L -6.75,14.4 M 0,14.4 L 6.75,14.4';
+        else body = 'M -6.75,6.75 L 6.75,-6.75 M -6.75,-6.75 L 6.75,6.75';
+        let theta = 0;
+        if ('theta' in options) {
+          if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta must be a finite number.');
+          theta = Number(options.theta);
+        }
+        const sx = 'reverse' in options ? -1 : 1, sy2 = 'flip' in options ? -1 : 1;
+        const tf = `translate(${x} ${y})` + (theta ? ` rotate(${-theta})` : '') + ((sx !== 1 || sy2 !== 1) ? ` scale(${sx} ${sy2})` : '');
+        elements.push(`<g transform="${tf}"><path d="${body}" ${stroke}/></g>`);
+        // Labels follow Schemdraw's default side: above for grounds/Vdd, below for Vss/NoConnect.
+        const ext = type === 'Vdd' ? [-14.4, 0] : type === 'Vss' ? [0, 14.4] : type === 'NoConnect' ? [-6.75, 6.75] : type === 'Ground' ? [0, lead + 8.64] : [0, 23.4];
+        const xext = type === 'GroundChassis' ? [-13.5, 6.75] : (type === 'Ground' || type === 'GroundSignal') ? [-9, 9] : [-6.75, 6.75];
+        const rotalign = [['center', 'bottom'], ['right', 'bottom'], ['right', 'center'], ['right', 'top'],
+          ['center', 'top'], ['left', 'top'], ['left', 'center'], ['left', 'bottom']];
+        // Mirror the symbol extents for flip/reverse before placing labels.
+        const extF = sy2 === -1 ? [-ext[1], -ext[0]] : ext;
+        const xextF = sx === -1 ? [-xext[1], -xext[0]] : xext;
+        for (const label of labels) {
+          let loc = label.loc || (['Vss', 'NoConnect'].includes(type) ? 'bot' : 'top');
+          const normalizedTheta = ((theta % 360) + 360) % 360;
+          // Schemdraw keeps the label on the same visual side: flip the side
+          // when the element points left/down.
+          if (normalizedTheta > 90 && normalizedTheta <= 270) {
+            loc = ({ top: 'bot', bot: 'top', bottom: 'top', left: 'right', right: 'left' })[loc] || loc;
+          }
+          const rotation = label.rotate === true ? theta : typeof label.rotate === 'number' ? label.rotate : 0;
+          let th = theta - rotation;
+          if (loc === 'bot' || loc === 'bottom') th += 180;
+          else if (loc === 'left') th += 90;
+          else if (loc === 'right') th += 270;
+          const sector = Math.round((((th % 360) + 360) % 360) / 45) % 8;
+          let anchor = { left: 'start', center: 'middle', right: 'end' }[rotalign[sector][0]];
+          if (label.halign) anchor = { left: 'start', center: 'middle', right: 'end' }[label.halign];
+          const baseline = rotalign[sector][1] === 'top' ? ' dominant-baseline="hanging"'
+            : rotalign[sector][1] === 'center' ? ' dominant-baseline="central"' : '';
+          const rad = theta * Math.PI / 180, cosT = Math.cos(rad), sinT = Math.sin(rad);
+          const items = label.items || [label.text];
+          items.forEach((text, i) => {
+            const frac = label.items ? (i + 1) / (label.items.length + 1) : 0.5;
+            let lx0 = xextF[0] + (xextF[1] - xextF[0]) * frac;
+            // Schemdraw resolves offsets per side: top labels use the positive
+            // magnitude (default 0.1), bottom labels invert an explicit offset.
+            const ofstY = Array.isArray(label.ofst) ? label.ofst[1] : (typeof label.ofst === 'number' ? label.ofst : null);
+            const off = loc === 'top' ? (ofstY == null ? 0.1 : ofstY) : (ofstY == null ? 0.1 : -ofstY);
+            let ly0 = loc === 'top' ? extF[0] - off * 36 : extF[1] + off * 36;
+            if (Array.isArray(label.ofst)) lx0 += label.ofst[0] * 36;
+            // Rotate the label position with theta (extents are already mirrored).
+            const lx = x + lx0 * cosT + ly0 * sinT;
+            const ly = y - lx0 * sinT + ly0 * cosT;
+            const transform = rotation ? ` transform="rotate(${-rotation} ${lx} ${ly})"` : '';
+            elements.push(`<text x="${lx}" y="${ly}" text-anchor="${anchor}"${baseline}${transform}${textFill} font-family="sans-serif" font-size="${labelSize}">${labelContent(text)}</text>`);
+            const width = Math.max(12, Array.from(text).length * 10);
+            bounds(lx - width, ly - 20, lx + width, ly + 20);
+          });
+        }
+        bounds(x - 15, y - 25, x + 15, y + 25);
+        if (name) names[name] = { start: [x, y], center: [x, y], end: [x, y], xy: [x, y] };
+        log(`${type}: at (${x / 36}, ${-y / 36})`);
+        if ('hold' in options) [x, y, direction] = previousState;
+        continue;
+      }
+      if (type === 'SwitchRotary' || type === 'SwitchDIP') {
+        // Free-standing symbols: they are placed at the current point (or `at`)
+        // and do not move the drawing position unless `hold` is omitted, like
+        // Schemdraw's Element with an explicit anchor.
+        if (selectedDirection || length !== null || 'anchor' in options || ['to', 'tox', 'toy', 'endpoints'].some(key => key in options)) throw new Error(`${type} does not support direction, length, anchor, to/tox/toy, or endpoints.`);
+        if ('at' in options) [x, y] = atPoint(options.at);
+        const gateBool2 = (key, fallback) => {
+          if (!(key in options)) return fallback;
+          if (!['True', 'False'].includes(options[key])) throw new Error(`${key} must be True or False.`);
+          return options[key] === 'True';
+        };
+        const positive = (key, fallback) => {
+          if (!(key in options)) return fallback;
+          if (typeof options[key] !== 'string' || !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(options[key]) || !(Number(options[key]) > 0)) throw new Error(`${key} must be a positive number.`);
+          return Number(options[key]) * 36;
+        };
+        const count = (key, fallback) => {
+          if (!(key in options)) return fallback;
+          if (typeof options[key] !== 'string' || !/^\d+$/.test(options[key]) || !Number.isSafeInteger(Number(options[key]))) throw new Error(`${key} must be an integer.`);
+          return Number(options[key]);
+        };
+        const sxw = 'reverse' in options ? -1 : 1, syw = 'flip' in options ? -1 : 1;
+        let reachOne = 60, reachTwo = 60;
+        const anchors = Object.create(null);
+        let glyph = '';
+        if (type === 'SwitchRotary') {
+          const n = count('n', 4);
+          if (n < 1 || n > 16) throw new Error('SwitchRotary n must be an integer between 1 and 16.');
+          const radius = positive('radius', 36);
+          const arrowlen = positive('arrowlen', 0.75 * 36);
+          const arrowcontact = count('arrowcontact', 0);
+          if (arrowcontact > n - 1) throw new Error('SwitchRotary arrowcontact must be between 0 and n-1.');
+          const dtheta = 'dtheta' in options ? positive('dtheta', 0) / 36 : Math.min(35, 360 / (n + 1));
+          const theta0 = 'theta0' in options ? positive('theta0', 0) / 36 : -dtheta * (n - 1) / 2;
+          glyph += switchDot(0, 0, color);
+          for (let i = 0; i < n; i++) {
+            const t = (theta0 + dtheta * i) * Math.PI / 180;
+            const px = radius * Math.cos(t), py = radius * Math.sin(t);
+            glyph += switchDot(px, -py, color);
+            anchors[`T${i + 1}`] = [x + sxw * px, y + syw * -py];
+            if (i === arrowcontact) {
+              const ax2 = arrowlen * Math.cos(t), ay2 = -arrowlen * Math.sin(t);
+              const ux = ax2, uy = ay2, len = Math.hypot(ux, uy) || 1;
+              const [ex, ey] = [ux / len, uy / len], [nx, ny] = [-ey, ex];
+              glyph += `<path d="M 0,0 L ${(ax2 - ex * 9).toFixed(3)},${(ay2 - ey * 9).toFixed(3)}" ${stroke}/>` +
+                `<path d="M ${(ax2 + ex * 1.5).toFixed(3)},${(ay2 + ey * 1.5).toFixed(3)} L ${(ax2 - ex * 7.5 + nx * 2.7).toFixed(3)},${(ay2 - ey * 7.5 + ny * 2.7).toFixed(3)} L ${(ax2 - ex * 7.5 - nx * 2.7).toFixed(3)},${(ay2 - ey * 7.5 - ny * 2.7).toFixed(3)} Z" fill="${color}"/>`;
+            }
+          }
+          anchors.P = [x, y];
+          // Contact circles are "bg" fills in Schemdraw and must stay on top.
+          for (const key of Object.keys(anchors)) whiteMarker(anchors[key][0], anchors[key][1], 4.32, color);
+          reachOne = reachTwo = Math.max(radius, arrowlen) + 10;
+        } else {
+          const n = count('n', 3);
+          if (n < 1 || n > 32) throw new Error('SwitchDIP n must be an integer between 1 and 32.');
+          const swidth = positive('swidth', 0.4 * 36);
+          const spacing = positive('spacing', 0.2 * 36);
+          const switchColor = options.switchcolor === undefined ? '#333333' : readColor(options.switchcolor);
+          const pattern = [];
+          if ('pattern' in options) {
+            const match = /^\[([^\]]*)\]$/.exec(options.pattern);
+            if (!match) throw new Error('pattern must use the form [True False True].');
+            for (const item of match[1].split(/[\s,]+/).filter(Boolean)) {
+              if (!['True', 'False', '0', '1'].includes(item)) throw new Error('pattern entries must be True, False, 0, or 1.');
+              pattern.push(item === 'True' || item === '1');
+            }
+            if (pattern.length !== n) throw new Error(`pattern has ${pattern.length} entries but n=${n}.`);
+          }
+          const width = swidth * n + spacing * (n + 1), height = swidth * 2 + spacing * 2;
+          glyph += `<rect x="0" y="${(-height).toFixed(3)}" width="${width.toFixed(3)}" height="${height.toFixed(3)}" fill="none" stroke="${color}" stroke-width="2"/>`;
+          for (let i = 0; i < n; i++) {
+            const lx = spacing * (i + 1) + swidth * i;
+            const upper = pattern.length ? pattern[i] : false;
+            const lower = pattern.length ? !pattern[i] : false;
+            glyph += `<rect x="${lx.toFixed(3)}" y="${(-(spacing + swidth * 2)).toFixed(3)}" width="${swidth.toFixed(3)}" height="${swidth.toFixed(3)}" fill="${upper ? switchColor : 'none'}" stroke="${color}" stroke-width="2"/>`;
+            glyph += `<rect x="${lx.toFixed(3)}" y="${(-(spacing + swidth)).toFixed(3)}" width="${swidth.toFixed(3)}" height="${swidth.toFixed(3)}" fill="${lower ? switchColor : 'none'}" stroke="${color}" stroke-width="2"/>`;
+            anchors[`a${i + 1}`] = [x + sxw * (lx + swidth / 2), y];
+              anchors[`b${i + 1}`] = [x + sxw * (lx + swidth / 2), y + syw * -height];
+          }
+          reachOne = width + 10;
+          reachTwo = height + 10;
+        }
+        // The glyph is built in screen coordinates; mirror it around the
+        // insertion point for flip / reverse.
+        glyph = sxw === 1 && syw === 1 ? glyph
+          : `<g transform="translate(${x} ${y}) scale(${sxw} ${syw}) translate(${-x} ${-y})">${glyph}</g>`;
+        elements.push(glyph);
+        // Bounds follow the actual extent so the viewBox is not inflated.
+        bounds(x - reachOne, y - reachTwo, x + reachOne, y + reachTwo);
+        for (const key in anchors) bounds(anchors[key][0] - 6, anchors[key][1] - 6, anchors[key][0] + 6, anchors[key][1] + 6);
+        if (name) names[name] = Object.assign({ center: [x, y], xy: [x, y] }, anchors);
+        log(`${type}: at (${x / 36}, ${-y / 36})`);
+        if ('hold' in options) [x, y, direction] = previousState;
+        continue;
+      }
+      if (type === 'SwitchSpdt2') {
+        // Schemdraw's SwitchSpdt2 is an Element, not an Element2Term: the
+        // 1-unit glyph has no leads. It is placed at the current point (or
+        // `at`), and the drawing position moves to b (Schemdraw's drop).
+        const allowed = ['at', 'anchor', 'theta', 'color', 'flip', 'reverse', 'action', 'contacts', 'hold'];
+        if (length !== null || Object.keys(options).some(key => !allowed.includes(key))) throw new Error('SwitchSpdt2 supports at, anchor, direction, theta, color, flip, reverse, action, contacts, hold, and labels.');
+        if ('anchor' in options && !['a', 'b', 'c'].includes(options.anchor)) throw new Error(`Unknown SwitchSpdt2 anchor: ${options.anchor}`);
+        if ('at' in options) [x, y] = atPoint(options.at);
+        const sx = 'reverse' in options ? -1 : 1, sy = 'flip' in options ? -1 : 1;
+        if ('theta' in options) {
+          if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta must be a finite number.');
+          direction = Number(options.theta);
+        } else if (selectedDirection) direction = selectedDirection;
+        else direction = 'right';
+        const radians = typeof direction === 'number' ? direction * Math.PI / 180 : 0;
+        const [dx, dy, angle] = typeof direction === 'number' ? [Math.cos(radians), -Math.sin(radians), -direction] : directions[direction];
+        const contacts = options.contacts === undefined || options.contacts === 'True';
+        const aLocal = contacts ? 4.32 : 0;
+        const bLocal = contacts ? 31.68 : 36;
+        const mirror = ([lx, ly]) => [sx === -1 ? 36 - lx : lx, sy === -1 ? -ly : ly];
+        const world = ([lx, ly]) => {
+          const [mx, my] = mirror([lx, ly]);
+          return [x + mx * dx - my * dy, y + mx * dy + my * dx];
+        };
+        if ('anchor' in options) {
+          const [ax, ay] = mirror(options.anchor === 'a' ? [aLocal, 0] : [bLocal, options.anchor === 'b' ? -14.4 : 14.4]);
+          x -= ax * dx - ay * dy;
+          y -= ax * dy + ay * dx;
+        }
+        const anchors = {
+          a: world([aLocal, 0]),
+          b: world([bLocal, -14.4]),
+          c: world([bLocal, 14.4]),
+          center: world([18, 0])
+        };
+        const flags = Object.assign(Object.create(null), options);
+        flags.contacts = contacts;
+        const body = twoTerminalParts.SwitchSpdt2.body(stroke, color, flags);
+        elements.push(`<g transform="translate(${x} ${y}) rotate(${angle})"><g transform="translate(18 0) scale(${sx} ${sy}) translate(-18 0)">${body}</g></g>`);
+        for (const [lx, ly] of [[-2, -24], [38, -24], [-2, 24], [38, 24]]) {
+          const [bx, by] = world([lx, ly]);
+          bounds(bx - 2, by - 2, bx + 2, by + 2);
+        }
+        for (const label of labels) {
+          if (label.items || label.halign != null || label.ofst != null || label.rotate !== undefined) throw new Error('SwitchSpdt2 does not support list labels or label offsets.');
+          const loc = label.loc || 'top';
+          let localX, localY, anchor, baseline;
+          if (loc === 'top') { localX = 18; localY = -24; anchor = 'middle'; baseline = 'ideographic'; }
+          else if (loc === 'bot' || loc === 'bottom') { localX = 18; localY = 28; anchor = 'middle'; baseline = 'hanging'; }
+          else if (loc === 'left') { localX = -8; localY = 0; anchor = 'end'; baseline = 'central'; }
+          else if (loc === 'right') { localX = 44; localY = 0; anchor = 'start'; baseline = 'central'; }
+          else throw new Error(`Unsupported SwitchSpdt2 label loc: ${loc}`);
+          const [tx, ty] = world([localX, localY]);
+          elements.push(`<text x="${tx}" y="${ty}" text-anchor="${anchor}" dominant-baseline="${baseline}"${textFill} font-family="sans-serif" font-size="${labelSize}">${labelContent(label.text)}</text>`);
+          const width = Math.max(12, Array.from(label.text).length * 10);
+          bounds(tx - width, ty - 18, tx + width, ty + 8);
+        }
+        if (contacts) for (const key of ['a', 'b', 'c']) whiteMarker(anchors[key][0], anchors[key][1], 4.32, color);
+        if (name) {
+          names[name] = anchors;
+          namedBoxes[name] = { ...elemBox };
+        }
+        [x, y] = anchors.b;
+        log(`SwitchSpdt2: at (${x / 36}, ${-y / 36})`);
+        if ('hold' in options) [x, y, direction] = previousState;
+        continue;
+      }
+      if (['to', 'tox', 'toy'].filter(key => key in options).length > 1) throw new Error('to, tox, and toy cannot be specified together.');
+      if ('anchor' in options && ['to', 'tox', 'toy', 'endpoints'].some(key => key in options)) throw new Error('anchor cannot be combined with to, tox, toy, or endpoints.');
+      if ((selectedDirection || length !== null) && ('to' in options || 'tox' in options || 'toy' in options)) throw new Error('A direction or length cannot be combined with to/tox/toy.');
       let targetPoint = null;
       if ('to' in options || 'endpoints' in options) {
         if ('endpoints' in options) {
           const ref = '[A-Za-z_]\\w*\\.[A-Za-z_]\\w*';
           const match = new RegExp(`^\\s*(${ref})\\s+(${ref})\\s*$`).exec(options.endpoints);
-          if (!match) throw new Error('endpoints は始点と終点の参照を空白で区切って指定してください。');
+          if (!match) throw new Error('endpoints must specify start and end references separated by whitespace.');
           [x, y] = point(match[1]);
           targetPoint = point(match[2]);
         } else targetPoint = point(options.to);
         const vx = targetPoint[0] - x, vy = targetPoint[1] - y;
         length = Math.hypot(vx, vy);
-        if (!Number.isFinite(length) || length === 0) throw new Error('始点と終点は異なる有限の位置を指定してください。');
+        if (!Number.isFinite(length) || length === 0) throw new Error('Start and end points must be distinct finite positions.');
         if (vy === 0) direction = vx < 0 ? 'left' : 'right';
         else if (vx === 0) direction = vy < 0 ? 'up' : 'down';
         else direction = Math.atan2(-vy, vx) * 180 / Math.PI;
@@ -492,29 +4206,67 @@
         const degrees = ((Number(options.theta) % 360) + 360) % 360;
         direction = ({ 0: 'right', 90: 'up', 180: 'left', 270: 'down' })[degrees] || Number(options.theta);
       } else if (selectedDirection) direction = selectedDirection;
-      else if (isSource) direction = 'up';
+      else if (isSource || ['BjtNpn2', 'BjtPnp2', 'BjtPnp2c2', 'CurrentMirror', 'VoltageMirror', 'Nullator', 'Norator'].includes(type)) direction = 'up';
       if (length === null) length = unit;
-      if (type === 'Line' && 'arrow' in options && (!Number.isFinite(length) || length === 0)) throw new Error('長さがゼロまたは不正な Line に矢印を付けられません。');
+      if (type === 'Line' && 'arrow' in options && (!Number.isFinite(length) || length === 0)) throw new Error('Cannot add an arrow to a zero-length or invalid Line.');
       if (type === 'Gap' && length < 36) length = 36;
-      if (targetPoint && type === 'Gap' && length !== Math.hypot(targetPoint[0] - x, targetPoint[1] - y)) throw new Error('Gap の端子間距離が短すぎます。');
-      if (type === 'Resistor' && length < 36) throw new Error('Resistor の長さが短すぎます。');
-      if (type === 'Inductor' && length < 36) throw new Error('Inductor の長さが短すぎます。');
-      if (type === 'Capacitor' && length < 6.48) throw new Error('Capacitor の長さが短すぎます。');
-      if (['Diode', 'Zener'].includes(type) && length < 12.6) throw new Error(`${type} の長さが短すぎます。`);
-      if (isSource && length < 36) throw new Error(`${type} の長さが短すぎます。`);
+      if (targetPoint && type === 'Gap' && length !== Math.hypot(targetPoint[0] - x, targetPoint[1] - y)) throw new Error('Gap terminal spacing is too short.');
+      if (type === 'Resistor' && length < 36) throw new Error('Resistor length is too short.');
+      if (type === 'Inductor' && length < 36) throw new Error('Inductor length is too short.');
+      if (type === 'Capacitor' && length < 6.48) throw new Error('Capacitor length is too short.');
+      if (['Diode', 'Zener', 'LED', 'Diac', 'SCR', 'Triac'].includes(type) && length < 12.6) throw new Error(`${type} length is too short.`);
+      const partDef = twoTerminalParts[type];
+      if (zoom !== 1 && !(partDef && (partDef.form === 'glyph' || ['Source', 'SourceV', 'SourceSin', 'Line'].includes(type)))) throw new Error(`scale is not supported for ${type}.`);
+      if (partDef && partDef.form === 'glyph' && length < partDef.half * 2) throw new Error(`${type} length is too short.`);
+      if (['Potentiometer', 'Rshunt', 'Fuse'].includes(type) && length < 36) throw new Error(`${type} length is too short.`);
+      if (['BjtNpn2', 'BjtPnp2', 'BjtPnp2c2'].includes(type) && length < 39.6) throw new Error(`${type} length is too short.`);
+      if (['NMos2', 'PMos2'].includes(type) && length < 60) throw new Error(`${type} length is too short.`);
+      if (['NFet2', 'PFet2'].includes(type) && length < 54) throw new Error(`${type} length is too short.`);
+      if (['JFetN2', 'JFetP2'].includes(type) && length < 48) throw new Error(`${type} length is too short.`);
+      if (['CurrentMirror', 'VoltageMirror'].includes(type) && length < 36) throw new Error(`${type} length is too short.`);
+      if (type === 'Breaker' && length < 36) throw new Error('Breaker length is too short.');
+      if (type === 'Inductor2' && length < 36) throw new Error('Inductor2 length is too short.');
+      if (type === 'CPE' && length < 9) throw new Error('CPE length is too short.');
+      if (['Nullator', 'Norator'].includes(type) && length < 36) throw new Error(`${type} length is too short.`);
+      if (type === 'Memristor2' && length < 50.4) throw new Error('Memristor2 length is too short.');
+      if (type === 'ResistorVar' && length < 36) throw new Error('ResistorVar length is too short.');
+      if (['ResistorVarIEC', 'ResistorVarIEEE', 'PotentiometerIEC', 'PotentiometerIEEE', 'FuseIEC', 'FuseIEEE'].includes(type) && length < 36) throw new Error(`${type} length is too short.`);
+      if (type === 'Capacitor2' && length < 6.48) throw new Error('Capacitor2 length is too short.');
+      if (['DiodeTunnel', 'DiodeShockley'].includes(type) && length < 12.6) throw new Error(`${type} length is too short.`);
+      if (type === 'DiodeTVS' && length < 25.2) throw new Error('DiodeTVS length is too short.');
+      if (type === 'Josephson' && length < 18) throw new Error('Josephson length is too short.');
+      if (['Photoresistor', 'PhotoresistorBox', 'PhotoresistorIEC', 'PhotoresistorIEEE'].includes(type) && length < 36) throw new Error(`${type} length is too short.`);
+      if (type === 'Motor' && length < 51.84) throw new Error('Motor length is too short.');
+      const batterySpan = type === 'Battery' ? 20.25 : type === 'BatteryCell' ? 6.75 : type === 'BatteryDouble' ? 60.75 : 0;
+      if (batterySpan && length < batterySpan) throw new Error(`${type} length is too short.`);
+      if (isSource && length < 36) throw new Error(`${type} length is too short.`);
       const arbitraryAngle = typeof direction === 'number';
       const radians = arbitraryAngle ? direction * Math.PI / 180 : 0;
       const [dx, dy, angle] = arbitraryAngle ? [Math.cos(radians), -Math.sin(radians), -direction] : directions[direction];
-      const startX = x, startY = y;
-      const endX = targetPoint ? targetPoint[0] : x + dx * length;
-      const endY = targetPoint ? targetPoint[1] : y + dy * length;
-      const centerX = (x + endX) / 2, centerY = (y + endY) / 2;
-      const bodyLength = type === 'Capacitor' ? 6.48 : ['Diode', 'Zener'].includes(type) ? 12.6 : type === 'Line' ? 0 : 36;
+      let startX = x, startY = y;
+      let endX = targetPoint ? targetPoint[0] : x + dx * length;
+      let endY = targetPoint ? targetPoint[1] : y + dy * length;
+      let centerX = (x + endX) / 2, centerY = (y + endY) / 2;
+      const bodyLength = partDef && partDef.form === 'glyph' ? partDef.half * 2 : ['BjtNpn2', 'BjtPnp2', 'BjtPnp2c2'].includes(type) ? 39.6 : ['NMos2', 'PMos2'].includes(type) ? 60 : ['NFet2', 'PFet2'].includes(type) ? 54 : ['JFetN2', 'JFetP2'].includes(type) ? 48 : type === 'CPE' ? 9 : type === 'Memristor2' ? 50.4 : type === 'Capacitor2' ? 6.48 : type === 'DiodeTVS' ? 25.2 : type === 'Josephson' ? 18 : type === 'Motor' ? 51.84 : ['BusLine', 'DataBusLine'].includes(type) ? 0 : ['Coax', 'Triax'].includes(type) ? length : ['CurrentMirror', 'VoltageMirror'].includes(type) ? 36 : type === 'Capacitor' ? 6.48 : ['Diode', 'DiodeTunnel', 'DiodeShockley', 'Zener', 'LED', 'Diac', 'SCR', 'Triac'].includes(type) ? 12.6 : type === 'Line' ? 0 : batterySpan || 36;
       // Gap labels are anchored to the terminal span, not the shifted body.
-      const shiftOffset = type === 'Gap' ? 0 : (length - bodyLength) / 2 * shift;
-      if (!Number.isFinite(shiftOffset)) throw new Error('shift が大きすぎます。');
+      const scaledBody = bodyLength * zoom;
+      const shiftOffset = type === 'Gap' ? 0 : (length - scaledBody) / 2 * shift;
+      if (!Number.isFinite(shiftOffset)) throw new Error('shift is too large.');
+      const placementX = x, placementY = y;
+      if ('anchor' in options) {
+        // Schemdraw's .anchor(name): shift the element so the named local
+        // anchor lands on the current drawing position (or the `at` point).
+        const localAnchors = twoTerminalLocalAnchors(type, length, shiftOffset, sy, options, { tapH, batterySpan, coaxRadius, coaxLead, bulk });
+        if (!Object.prototype.hasOwnProperty.call(localAnchors, options.anchor)) throw new Error(`Unknown ${type} anchor: ${options.anchor}`);
+        const [ax, ay] = localAnchors[options.anchor];
+        x -= ax * dx - ay * dy;
+        y -= ax * dy + ay * dx;
+        startX = x; startY = y;
+        endX = x + dx * length; endY = y + dy * length;
+        centerX = (startX + endX) / 2; centerY = (startY + endY) / 2;
+      }
       const bodyCenterX = centerX + dx * shiftOffset, bodyCenterY = centerY + dy * shiftOffset;
-      let path = paths[type];
+      let path = partDef && partDef.form === 'path' ? partDef.path : '';
       if (type === 'Line') {
         const arrow = options.arrow || '';
         path = `M ${arrow.includes('<') ? 9 : 0},0 L ${length - (arrow.includes('>') ? 9 : 0)},0`;
@@ -533,30 +4285,415 @@
         for (let i = 0; i < 4; i++) path += ` M ${start + i * 9},0 a 4.5,4.5 0 1 1 9,0`;
         path += ` M ${start + 36},0 L ${length},0`;
       }
+      let shapeExtra = '';
+      if (type === 'Inductor2') {
+        const c = length / 2 + shiftOffset, a = c - 18;
+        path = `M 0,0 L ${a},0 M ${a + 36},0 L ${length},0`;
+        const points = cycloidPoints(loops);
+        let glyph = `M ${a},0` + points.map(([u, v]) => ` L ${(a + u * 36).toFixed(4)},${(v * 36 * sy).toFixed(4)}`).join('');
+        glyph += ` L ${a + 36},0`;
+        for (let i = 0; i < coreLines; i++) {
+          const y = -(18 + 4.32 * i) * sy;
+          glyph += ` M ${a},${y} L ${a + 36},${y}`;
+        }
+        const body = `<path d="${glyph}" ${stroke}/>`;
+        shapeExtra = 'reverse' in options ? `<g transform="translate(${2 * c} 0) scale(-1 1)">${body}</g>` : body;
+      }
+      if (type === 'CPE') {
+        const c = length / 2 + shiftOffset;
+        path = `M 0,0 L ${c - 4.5},0 M ${c + 4.5},0 L ${length},0`;
+        let glyph = `M ${c - 4.5},0 L ${c - 13.5},0`;
+        glyph += ` M ${c + 4.5},0 L ${c - 4.5},${9 * sy} M ${c + 4.5},0 L ${c - 4.5},${-9 * sy}`;
+        glyph += ` M ${c - 4.5},0 L ${c - 13.5},${-9 * sy} M ${c - 4.5},0 L ${c - 13.5},${9 * sy}`;
+        const body = `<path d="${glyph}" ${stroke}/>`;
+        shapeExtra = 'reverse' in options ? `<g transform="translate(${2 * c} 0) scale(-1 1)">${body}</g>` : body;
+      }
+      if (type === 'Nullator' || type === 'Norator') {
+        const c = length / 2 + shiftOffset, a = c - 18, b = c + 18;
+        path = `M 0,0 L ${a},0 M ${b},0 L ${length},0`;
+        let glyph;
+        if (type === 'Nullator') {
+          glyph = `<ellipse cx="${c}" cy="0" rx="18" ry="9" fill="none" stroke="${color}" stroke-width="2"/>`;
+        } else {
+          glyph = `<circle cx="${c - 9}" cy="0" r="9" fill="none" stroke="${color}" stroke-width="2"/><circle cx="${c + 9}" cy="0" r="9" fill="none" stroke="${color}" stroke-width="2"/>`;
+        }
+        shapeExtra = 'reverse' in options ? `<g transform="translate(${2 * c} 0) scale(-1 1)">${glyph}</g>` : glyph;
+      }
+      if (type === 'Memristor2') {
+        const c = length / 2 + shiftOffset, a = c - 25.2;
+        path = `M 0,0 L ${a},0 M ${a + 50.4},0 L ${length},0`;
+        const pts = [[0, 0], [0, -9], [7.2, -9], [7.2, 9], [14.4, 9], [14.4, -9], [21.6, -9], [21.6, 9], [28.8, 9], [28.8, -9], [36, -9], [36, 9], [43.2, 9], [43.2, 0], [50.4, 0]];
+        let glyph = `<path d="M ${pts.map(([px, py], i) => `${i ? 'L' : ''} ${a + px},${py * sy}`).join(' ')}" ${stroke}/>`;
+        shapeExtra = 'reverse' in options ? `<g transform="translate(${2 * c} 0) scale(-1 1)">${glyph}</g>` : glyph;
+      }
+      if (type === 'ResistorVar' || type === 'ResistorVarIEEE') {
+        const c = length / 2 + shiftOffset, a = c - 18;
+        path = `M 0,0 L ${a},0 L ${a + 3},${-9 * sy} L ${a + 9},${9 * sy} L ${a + 15},${-9 * sy} L ${a + 21},${9 * sy} L ${a + 27},${-9 * sy} L ${a + 33},${9 * sy} L ${a + 36},0 L ${length},0`;
+        let glyph = `<path d="M ${c - 9},${18 * sy} L ${c + 5.983},${-14.463 * sy}" ${stroke}/><path d="M ${c + 8.162},${-19.184 * sy} L ${c + 8.598},${-13.256 * sy} L ${c + 3.368},${-15.67 * sy} Z" fill="${color}"/>`;
+        shapeExtra = 'reverse' in options ? `<g transform="translate(${2 * c} 0) scale(-1 1)">${glyph}</g>` : glyph;
+      }
+      if (type === 'ResistorVarIEC') {
+        const c = length / 2 + shiftOffset, a = c - 18;
+        path = `M 0,0 L ${a},0 M ${a + 36},0 L ${length},0`;
+        let glyph = `<path d="M ${a},0 L ${a},${-9 * sy} L ${a + 36},${-9 * sy} L ${a + 36},${9 * sy} L ${a},${9 * sy} L ${a},0" ${stroke}/>`;
+        glyph += `<path d="M ${c - 12},${18 * sy} L ${c + 8.226},${-14.868 * sy}" ${stroke}/><path d="M ${c + 10.952},${-19.297 * sy} L ${c + 10.679},${-13.359 * sy} L ${c + 5.774},${-16.377 * sy} Z" fill="${color}"/>`;
+        shapeExtra = 'reverse' in options ? `<g transform="translate(${2 * c} 0) scale(-1 1)">${glyph}</g>` : glyph;
+      }
+      if (type === 'Capacitor2') {
+        const c = length / 2 + shiftOffset, first = c - 3.24, second = c + 3.24;
+        path = `M 0,0 L ${first},0 M ${second},0 L ${length},0`;
+        let glyph = `<path d="M ${first},${-9 * sy} L ${first},${9 * sy} M ${second + 0.68},${9.56 * sy} a 4.86 11.25 0 0 ${sy === 1 ? 1 : 0} 0 ${-19.12 * sy}" ${stroke}/>`;
+        if (polar) glyph += `<text x="${c - 11.016}" y="${-20.48 * sy}" text-anchor="middle" dominant-baseline="central"${textFill} font-family="sans-serif" font-size="${labelSize}">+</text>`;
+        shapeExtra = 'reverse' in options ? `<g transform="translate(${2 * c} 0) scale(-1 1)">${glyph}</g>` : glyph;
+      }
+      if (type === 'DiodeTunnel') {
+        const c = length / 2 + shiftOffset, first = c - 6.3, second = c + 6.3;
+        path = `M 0,0 L ${first},0 M ${second},0 L ${length},0`;
+        const glyph = `<path d="M ${first},${-9 * sy} L ${second},0 L ${first},${9 * sy} Z M ${second},${-9 * sy} L ${second},${9 * sy} M ${second},${-9 * sy} L ${second - 3.6},${-9 * sy} M ${second},${9 * sy} L ${second - 3.6},${9 * sy}" ${stroke}/>`;
+        shapeExtra = 'reverse' in options ? `<g transform="translate(${2 * c} 0) scale(-1 1)">${glyph}</g>` : glyph;
+      }
+      if (type === 'DiodeTVS') {
+        const c = length / 2 + shiftOffset, left = c - 12.6, mid = c, right = c + 12.6;
+        path = `M 0,0 L ${left},0 M ${right},0 L ${length},0`;
+        const glyph = `<path d="M ${left},${-9 * sy} L ${mid},0 L ${left},${9 * sy} Z M ${mid},0 L ${right},${-9 * sy} L ${right},${9 * sy} Z M ${mid + 3.6},${-9 * sy} L ${mid},${-9 * sy} L ${mid},${9 * sy} L ${mid - 3.6},${9 * sy}" ${stroke}/>`;
+        shapeExtra = 'reverse' in options ? `<g transform="translate(${2 * c} 0) scale(-1 1)">${glyph}</g>` : glyph;
+      }
+      if (type === 'DiodeShockley') {
+        const c = length / 2 + shiftOffset, first = c - 6.3, second = c + 6.3;
+        path = `M 0,0 L ${first},0 M ${second},0 L ${length},0`;
+        const glyph = `<path d="M ${first},${-9 * sy} L ${second},0 L ${first},${9 * sy} Z M ${second},${-9 * sy} L ${second},${9 * sy} M ${first},${9 * sy} L ${first},${-9 * sy} L ${second},0" ${stroke}/>`;
+        shapeExtra = 'reverse' in options ? `<g transform="translate(${2 * c} 0) scale(-1 1)">${glyph}</g>` : glyph;
+      }
+      if (type === 'Josephson') {
+        const c = length / 2 + shiftOffset;
+        if (josephsonBox) {
+          path = `M 0,0 L ${c - 9},0 M ${c + 9},0 L ${length},0`;
+          shapeExtra = `<path d="M ${c - 9},${-9 * sy} L ${c + 9},${-9 * sy} L ${c + 9},${9 * sy} L ${c - 9},${9 * sy} Z M ${c - 9},${-9 * sy} L ${c + 9},${9 * sy} M ${c + 9},${-9 * sy} L ${c - 9},${9 * sy}" ${stroke}/>`;
+        } else {
+          path = `M 0,0 L ${c},0 M ${c},0 L ${length},0`;
+          shapeExtra = `<path d="M ${c - 9},${-9 * sy} L ${c + 9},${9 * sy} M ${c + 9},${-9 * sy} L ${c - 9},${9 * sy}" ${stroke}/>`;
+        }
+      }
+      if (['Photoresistor', 'PhotoresistorBox', 'PhotoresistorIEC', 'PhotoresistorIEEE'].includes(type)) {
+        const c = length / 2 + shiftOffset, a = c - 18;
+        if (type === 'Photoresistor' || type === 'PhotoresistorIEEE') {
+          path = `M 0,0 L ${a},0 L ${a + 3},${-9 * sy} L ${a + 9},${9 * sy} L ${a + 15},${-9 * sy} L ${a + 21},${9 * sy} L ${a + 27},${-9 * sy} L ${a + 33},${9 * sy} L ${a + 36},0 L ${length},0`;
+        } else {
+          path = `M 0,0 L ${a},0 M ${a + 36},0 L ${length},0`;
+        }
+        let glyph = '';
+        if (type === 'PhotoresistorBox' || type === 'PhotoresistorIEC') {
+          glyph += `<path d="M ${a},0 L ${a},${-9 * sy} L ${a + 36},${-9 * sy} L ${a + 36},${9 * sy} L ${a},${9 * sy} L ${a},0" ${stroke}/>`;
+        }
+        glyph += `<path d="M ${c + 7.2},${-27 * sy} L ${c + 1.086},${-19.867 * sy} M ${c + 18},${-27 * sy} L ${c + 11.886},${-19.867 * sy}" ${stroke}/><path d="M ${c - 2.298},${-15.919 * sy} L ${c - 1.101},${-21.741 * sy} L ${c + 3.272},${-17.992 * sy} Z M ${c + 8.502},${-15.919 * sy} L ${c + 9.699},${-21.741 * sy} L ${c + 14.072},${-17.992 * sy} Z" fill="${color}"/>`;
+        shapeExtra = 'reverse' in options ? `<g transform="translate(${2 * c} 0) scale(-1 1)">${glyph}</g>` : glyph;
+      }
+      if (type === 'Coax') {
+        if (length <= 2 * coaxLead + coaxRadius) throw new Error('Coax length is too short.');
+        const L = length, l = coaxLead, r = coaxRadius, c = L / 2 + shiftOffset;
+        path = `M 0,0 L ${l},0 M ${L - l + r / 2},0 L ${L},0`;
+        const glyph = `<ellipse cx="${l}" cy="0" rx="${r / 2}" ry="${r}" fill="none" stroke="${color}" stroke-width="2"/><path d="M ${l},${-r * sy} L ${L - l},${-r * sy} M ${l},${r * sy} L ${L - l},${r * sy} M ${L - l},${-r * sy} a ${r / 2} ${r} 0 0 ${sy === 1 ? 1 : 0} 0 ${2 * r * sy}" ${stroke}/>`;
+        shapeExtra = glyph;
+      }
+      if (type === 'Triax') {
+        if (length !== 108) throw new Error('Triax only supports its default length of 3.');
+        path = `M 0,0 L 21.6,0 M 91.8,0 L 108,0`;
+        let glyph = `<ellipse cx="21.6" cy="0" rx="5.4" ry="10.8" fill="none" stroke="${color}" stroke-width="2"/>`;
+        glyph += `<path d="M 21.6,${-10.8 * sy} L 41.753,${-10.8 * sy} M 21.6,${10.8 * sy} L 41.753,${10.8 * sy} M 32.4,${-21.6 * sy} L 75.6,${-21.6 * sy} M 32.4,${21.6 * sy} L 75.6,${21.6 * sy} M 84.953,${-10.8 * sy} L 86.4,${-10.8 * sy} M 84.953,${10.8 * sy} L 86.4,${10.8 * sy}" ${stroke}/>`;
+        glyph += `<path d="M 86.4,${-10.8 * sy} a 5.4 10.8 0 1 ${sy === 1 ? 1 : 0} 0 ${21.6 * sy} M 23.047,${-10.8 * sy} a 10.8 21.6 0 1 ${sy === 1 ? 1 : 0} 0 ${21.6 * sy} M 75.6,${-21.6 * sy} a 10.8 21.6 0 1 ${sy === 1 ? 1 : 0} 0 ${43.2 * sy}" ${stroke}/>`;
+        shapeExtra = glyph;
+      }
+      if (type === 'Motor') {
+        const c = length / 2 + shiftOffset, a = c - 25.92;
+        path = `M 0,0 L ${a},0 M ${a + 51.84},0 L ${length},0`;
+        let glyph = `<circle cx="${c}" cy="0" r="18" fill="none" stroke="${color}" stroke-width="2"/>`;
+        glyph += `<path d="M ${a + 7.92},${7.92 * sy} L ${a},${7.92 * sy} L ${a},${-7.92 * sy} L ${a + 7.92},${-7.92 * sy} M ${a + 43.92},${7.92 * sy} L ${a + 51.84},${7.92 * sy} L ${a + 51.84},${-7.92 * sy} L ${a + 43.92},${-7.92 * sy}" ${stroke}/>`;
+        shapeExtra = 'reverse' in options ? `<g transform="translate(${2 * c} 0) scale(-1 1)">${glyph}</g>` : glyph;
+      }
+      if (type === 'BusLine') {
+        path = '';
+        shapeExtra = `<path d="M 0,0 L ${length},0" fill="none" stroke="${color}" stroke-width="${busLw}" stroke-linecap="round" stroke-linejoin="round"/>`;
+      }
+      if (type === 'DataBusLine') {
+        const c = length / 2 + shiftOffset;
+        path = `M 0,0 L ${c},0 M ${c},0 L ${length},0`;
+        shapeExtra = `<path d="M ${c - 4.5},${-9 * sy} L ${c + 4.5},${9 * sy}" ${stroke}/>`;
+      }
       if (type === 'Diode' && (length !== defaultUnit || shiftOffset !== 0)) {
         const first = length / 2 - 6.3 + shiftOffset, second = length / 2 + 6.3 + shiftOffset;
         path = `M 0,0 L ${first},0 M ${first},-9 L ${second},0 L ${first},9 Z M ${second},-9 L ${second},9 M ${second},0 L ${length},0`;
       }
-      let shape;
-      if (type === 'Zener') {
+      // Extra geometry for multi-terminal two-terminal-style parts. Schemdraw
+      // defines these as Element2Term subclasses with additional anchors.
+      // Schemdraw's reverse() mirrors an Element2Term's glyph about the body
+      // center while the leads keep their extended positions.
+      const reverseGroup = (glyph, c) => 'reverse' in options
+        ? `<g transform="translate(${2 * c} 0) scale(-1 1)">${glyph}</g>`
+        : glyph;
+      if (type === 'BjtNpn2' || type === 'BjtPnp2' || type === 'BjtPnp2c2') {
+        const c = length / 2 + shiftOffset;
+        const a = c - 19.8, b = c + 19.8;
+        const barA = c - 13.5, barB = c + 13.5;
+        const diagL = c - 7.2, diagR = c + 7.2;
+        const barY = -15.12 * sy, baseY = -28.62 * sy;
+        path = `M 0,0 L ${a},0 M ${b},0 L ${length},0`;
+        const arrow = (fx, fy, tx, ty) => {
+          const len = Math.hypot(tx - fx, ty - fy);
+          const ux = (tx - fx) / len, uy = (ty - fy) / len;
+          const tipX = tx - 2 * ux, tipY = ty - 2 * uy;
+          const bx = tipX - 7 * ux, by = tipY - 7 * uy;
+          return `<path d="M ${fx},${fy} L ${tipX},${tipY}" ${stroke}/><path d="M ${tipX},${tipY} L ${bx - 3.6 * uy},${by + 3.6 * ux} L ${bx + 3.6 * uy},${by - 3.6 * ux} Z" fill="${color}"/>`;
+        };
+        let glyph = `<path d="M 0,0 L ${a},0 L ${diagL},${barY} L ${diagR},${barY} L ${b},0 L ${length},0 M ${barA},${barY} L ${barB},${barY} M ${c},${barY} L ${c},${baseY}" ${stroke}/>`;
+        glyph += type === 'BjtNpn2' ? arrow(a, 0, diagL, barY) : arrow(diagR, barY, b, 0);
+        if (type === 'BjtPnp2c2') {
+          // Second collector: a short diagonal from the C2 tap to the base bar.
+          glyph += `<path d="M ${a + 9},0 L ${a + 21.6},${barY}" ${stroke}/>`;
+        }
+        shapeExtra = reverseGroup(glyph, c);
+      }
+      if (type === 'NMos2' || type === 'PMos2') {
+        const c = length / 2 + shiftOffset, a = c - 30, b = c + 30;
+        const gateX = c + (type === 'NMos2' ? 12 : -12);
+        const gateEnd = c - (type === 'NMos2' ? 12 : -12);
+        // Element2Term body: 20u wide with u = 1/12 drawing unit. The gate
+        // and source arrow sit below the terminal line for the default flip.
+        // Leads stay outside the reverse group so shift and reverse compose.
+        path = `M 0,0 L ${a},0 M ${b},0 L ${length},0`;
+        let glyph = `<path d="M ${a},0 L ${a + 21},0 L ${a + 21},${9 * sy} M ${a + 39},${9 * sy} L ${a + 39},0 L ${b},0 M ${a + 30},0 L ${a + (type === 'NMos2' ? 39 : 21)},0" ${stroke}/>`;
+        glyph += `<path d="M ${a + 19.5},${9 * sy} L ${a + 22.5},${9 * sy} M ${a + 28.5},${9 * sy} L ${a + 31.5},${9 * sy} M ${a + 37.5},${9 * sy} L ${a + 40.5},${9 * sy}" ${stroke}/>`;
+        glyph += `<path d="M ${gateX},${30 * sy} L ${gateX},${15 * sy} M ${gateX},${15 * sy} L ${gateEnd},${15 * sy}" ${stroke}/>`;
+        if (type === 'NMos2') {
+          glyph += `<path d="M ${a + 30},${3 * sy} L ${a + 30},0" ${stroke}/><path d="M ${a + 30},${7 * sy} L ${a + 27},${3 * sy} L ${a + 33},${3 * sy} Z" fill="${color}"/>`;
+        } else {
+          glyph += `<path d="M ${a + 30},${9 * sy} L ${a + 30},${6 * sy}" ${stroke}/><path d="M ${a + 30},${2 * sy} L ${a + 33},${6 * sy} L ${a + 27},${6 * sy} Z" fill="${color}"/>`;
+        }
+        // `diode=True` draws the body diode above the terminals (Schemdraw's
+        // `_Mosfet2` geometry, measured from the body's left edge `a`).
+        if (options.diode === 'True') {
+          const d9 = -9 * sy, d6 = -6 * sy, d12 = -12 * sy;
+          glyph += `<path d="M ${a + 21},0 L ${a + 21},${d9} L ${a + 27},${d9}" ${stroke}/>` +
+            `<path d="M ${a + 27},${d6} L ${a + 27},${d12}" ${stroke}/>` +
+            `<polygon points="${a + 27},${d9} ${a + 33},${d6} ${a + 33},${d12} " fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>` +
+            `<path d="M ${a + 33},${d9} L ${a + 39},${d9} L ${a + 39},0" ${stroke}/>`;
+        }
+        // `circle=True` encloses the transistor (centre 10u, -1u; r 7u).
+        if (options.circle === 'True') {
+          glyph += `<circle cx="${c}" cy="${3 * sy}" r="21" fill="none" stroke="${color}" stroke-width="2"/>`;
+        }
+        shapeExtra = reverseGroup(glyph, c);
+      }
+      if (type === 'NFet2' || type === 'PFet2') {
+        const c = length / 2 + shiftOffset, a = c - 27;
+        // Element2Term body for the simple FET: a raised box from the line
+        // with the gate bar and lead above it.
+        path = `M 0,0 L ${a},0 M ${a + 54},0 L ${length},0`;
+        let glyph = `<path d="M ${a},0 L ${a + 15},0 L ${a + 15},${-24 * sy} L ${a + 39},${-24 * sy} L ${a + 39},0 L ${a + 54},0" ${stroke}/>`;
+        glyph += `<path d="M ${a + 15},${-30 * sy} L ${a + 39},${-30 * sy}" ${stroke}/>`;
+        if (type === 'NFet2') {
+          glyph += `<path d="M ${a + 27},${-30 * sy} L ${a + 27},${-49.2 * sy}" ${stroke}/>`;
+        } else {
+          glyph += `<circle cx="${a + 27}" cy="${-34.2 * sy}" r="4.2" fill="none" stroke="${color}" stroke-width="2"/>`;
+          glyph += `<path d="M ${a + 27},${-38.4 * sy} L ${a + 27},${-49.2 * sy}" ${stroke}/>`;
+        }
+        if (bulk) {
+          glyph += `<path d="M ${a + 27},0 L ${a + 27},${-15 * sy}" ${stroke}/><path d="M ${a + 27},${-22 * sy} L ${a + 30.6},${-15 * sy} L ${a + 23.4},${-15 * sy} Z" fill="${color}"/>`;
+        }
+        shapeExtra = reverseGroup(glyph, c);
+      }
+      if (type === 'JFetN2' || type === 'JFetP2') {
+        const c = length / 2 + shiftOffset, a = c - 24;
+        // JFet2 body: 48-unit raised box with the gate bar on top.
+        path = `M 0,0 L ${a},0 M ${a + 48},0 L ${length},0`;
+        let glyph = `<path d="M ${a},0 L ${a + 15},0 L ${a + 15},${-18 * sy} L ${a + 33},${-18 * sy} L ${a + 33},0 L ${a + 48},0" ${stroke}/>`;
+        glyph += `<path d="M ${a + 10.2},${-18 * sy} L ${a + 37.8},${-18 * sy} M ${a + 33},${-18 * sy} L ${a + 33},${-33 * sy}" ${stroke}/>`;
+        if (type === 'JFetN2') {
+          glyph += `<path d="M ${a + 33},${-18 * sy} L ${a + 33},${-19.8 * sy}" ${stroke}/><path d="M ${a + 33},${-26.8 * sy} L ${a + 36.6},${-19.8 * sy} L ${a + 29.4},${-19.8 * sy} Z" fill="${color}"/>`;
+        } else {
+          glyph += `<path d="M ${a + 33},${-28.8 * sy} L ${a + 33},${-27 * sy}" ${stroke}/><path d="M ${a + 33},${-20 * sy} L ${a + 36.6},${-27 * sy} L ${a + 29.4},${-27 * sy} Z" fill="${color}"/>`;
+        }
+        if (circle) glyph += `<circle cx="${a + 24}" cy="${-9 * sy}" r="26.4" fill="none" stroke="${color}" stroke-width="2"/>`;
+        shapeExtra = reverseGroup(glyph, c);
+      }
+      if (type === 'CurrentMirror' || type === 'VoltageMirror') {
+        const c = length / 2 + shiftOffset, a = c - 18;
+        path = `M 0,0 L ${a},0 M ${a + 36},0 L ${length},0`;
+        let glyph;
+        if (type === 'CurrentMirror') {
+          glyph = `<circle cx="${a + 10.8}" cy="0" r="10.8" fill="none" stroke="${color}" stroke-width="2"/><circle cx="${a + 25.2}" cy="0" r="10.8" fill="none" stroke="${color}" stroke-width="2"/>`;
+        } else {
+          glyph = `<ellipse cx="${a + 10.8}" cy="0" rx="10.8" ry="5.4" fill="none" stroke="${color}" stroke-width="2"/><ellipse cx="${a + 25.2}" cy="0" rx="10.8" ry="5.4" fill="none" stroke="${color}" stroke-width="2"/>`;
+        }
+        shapeExtra = reverseGroup(glyph, c);
+      }
+      if (type === 'Breaker') {
+        const c = length / 2 + shiftOffset, a = c - 18;
+        path = `M 0,0 L ${a},0 M ${a + 36},0 L ${length},0`;
+        let glyph = `<path d="M ${a + 0.63},${-3.06 * sy} a 18 11.7 0 0 ${sy === 1 ? 1 : 0} 34.74 0" ${stroke}/>`;
+        if (dots) {
+          glyph += `<circle cx="${a + 4.32}" cy="0" r="4.32" fill="none" stroke="${color}" stroke-width="2"/><circle cx="${a + 31.68}" cy="0" r="4.32" fill="none" stroke="${color}" stroke-width="2"/>`;
+        }
+        shapeExtra = reverseGroup(glyph, c);
+      }
+      if (type === 'Potentiometer' || type === 'PotentiometerIEEE') {
+        const c = length / 2 + shiftOffset, a = c - 18, b = c + 18;
+        path = `M 0,0 L ${a},0 M ${b},0 L ${length},0`;
+        const glyph = `<path d="M ${a},0 L ${a + 3},${-9 * sy} L ${a + 9},${9 * sy} L ${a + 15},${-9 * sy} L ${a + 21},${9 * sy} L ${a + 27},${-9 * sy} L ${a + 33},${9 * sy} L ${b},0" ${stroke}/>`;
+        // Schemdraw draws the wiper arrow from the tap to the body and insets
+        // the arrow tip by 2 units from the body top.
+        shapeExtra = reverseGroup(glyph, c) + `<path d="M ${c},${-tapH * sy} L ${c},${-18 * sy}" ${stroke}/><path d="M ${c},${-11 * sy} L ${c - 2.7},${-18 * sy} L ${c + 2.7},${-18 * sy} Z" fill="${color}"/>`;
+      }
+      if (type === 'PotentiometerIEC') {
+        const c = length / 2 + shiftOffset, a = c - 18;
+        path = `M 0,0 L ${a},0 M ${a + 36},0 L ${length},0`;
+        const glyph = `<path d="M ${a},0 L ${a},${-9 * sy} L ${a + 36},${-9 * sy} L ${a + 36},${9 * sy} L ${a},${9 * sy} L ${a},0 M ${c},${-tapH * sy} L ${c},${-18 * sy}" ${stroke}/><path d="M ${c},${-11 * sy} L ${c - 2.7},${-18 * sy} L ${c + 2.7},${-18 * sy} Z" fill="${color}"/>`;
+        shapeExtra = reverseGroup(glyph, c);
+      }
+      if (type === 'Rshunt') {
+        const c = length / 2 + shiftOffset, a = c - 18, b = c + 18;
+        path = `M 0,0 L ${a},0 M ${b},0 L ${length},0`;
+        const glyph = `<path d="M ${a},0 L ${a},${-9 * sy} L ${b},${-9 * sy} L ${b},${9 * sy} L ${a},${9 * sy} L ${a},0" ${stroke}/><path d="M ${a},0 L ${a - 13.5},${9 * sy} L ${a - 13.5},${18 * sy}" ${stroke}/><path d="M ${b},0 L ${b + 13.5},${9 * sy} L ${b + 13.5},${18 * sy}" ${stroke}/>`;
+        shapeExtra = reverseGroup(glyph, c);
+      }
+      if (type === 'SCR') {
+        const c = length / 2 + shiftOffset, first = c - 6.3, second = c + 6.3;
+        path = `M 0,0 L ${first},0 M ${second},0 L ${length},0`;
+        const glyph = `<path d="M ${first},${-9 * sy} L ${second},0 L ${first},${9 * sy} Z M ${second},${-9 * sy} L ${second},${9 * sy} M ${second},0 L ${second + 10.8},${10.8 * sy} L ${second + 10.8},${18 * sy}" ${stroke}/>`;
+        shapeExtra = reverseGroup(glyph, c);
+      }
+      if (type === 'Triac') {
+        const c = length / 2 + shiftOffset, first = c - 6.3, second = c + 6.3;
+        path = `M 0,0 L ${first},0 M ${second},0 L ${length},0`;
+        const glyph = `<path d="M ${second},${-16.2 * sy} L ${second},${16.2 * sy} M ${first},${-16.2 * sy} L ${first},${16.2 * sy} M ${first},${18 * sy} L ${second},${9 * sy} L ${first},0 Z M ${second},${-18 * sy} L ${first},${-9 * sy} L ${second},0 Z M ${second},${-9 * sy} L ${second + 18},${-18 * sy}" ${stroke}/>`;
+        shapeExtra = reverseGroup(glyph, c);
+      }
+      if (type === 'LED') {
+        // Two light arrows above the diode body, positioned relative to the
+        // body's left edge as in Schemdraw's LED.
+        const first = length / 2 - 6.3 + shiftOffset, second = first + 12.6;
+        path = `M 0,0 L ${first},0 M ${first},${-9 * sy} L ${second},0 L ${first},${9 * sy} Z M ${second},${-9 * sy} L ${second},${9 * sy} M ${second},0 L ${length},0`;
+        shapeExtra = `<path d="M ${first + 9},${-13.5 * sy} L ${first + 14.428},${-23 * sy}" ${stroke}/><path d="M ${first + 17.008},${-27.514 * sy} L ${first + 16.928},${-21.57 * sy} L ${first + 11.927},${-24.428 * sy} Z" fill="${color}"/><path d="M ${first + 0.9},${-13.5 * sy} L ${first + 6.328},${-23 * sy}" ${stroke}/><path d="M ${first + 8.908},${-27.514 * sy} L ${first + 8.828},${-21.57 * sy} L ${first + 3.827},${-24.428 * sy} Z" fill="${color}"/>`;
+      }
+      if (type === 'Diac') {
+        const first = length / 2 - 6.3 + shiftOffset, second = first + 12.6;
+        path = `M 0,0 L ${first},0 M ${second},${-16.2 * sy} L ${second},${16.2 * sy} M ${first},${-16.2 * sy} L ${first},${16.2 * sy} M ${second},0 L ${length},0`;
+        shapeExtra = `<path d="M ${first},${18 * sy} L ${second},${9 * sy} L ${first},0 Z M ${second},${-18 * sy} L ${first},${-9 * sy} L ${second},0 Z" ${stroke}/>`;
+      }
+      if (type === 'Fuse' || type === 'FuseIEEE') {
+        const a = length / 2 - 18 + shiftOffset, b = a + 36;
+        path = `M 0,0 L ${a},0 L ${a},${-9 * sy} L ${b},${-9 * sy} L ${b},${9 * sy} L ${a},${9 * sy} L ${a},0 M ${b},0 L ${length},0 M ${a},0 L ${b},0`;
+      }
+      if (type === 'FuseIEC') {
+        const c = length / 2 + shiftOffset, a = c - 18;
+        path = `M 0,0 L ${a},0 M ${a + 36},0 L ${length},0`;
+        const glyph = `<path d="M ${a},0 L ${a},${-9 * sy} L ${a + 36},${-9 * sy} L ${a + 36},${9 * sy} L ${a},${9 * sy} L ${a},0 M ${c - 12.06},${-9 * sy} L ${c - 12.06},${9 * sy} M ${c + 12.06},${-9 * sy} L ${c + 12.06},${9 * sy}" ${stroke}/>`;
+        shapeExtra = reverseGroup(glyph, c);
+      }
+      if (['Battery', 'BatteryCell', 'BatteryDouble'].includes(type)) {
+        const bars = type === 'Battery' ? 4 : type === 'BatteryCell' ? 2 : 10;
+        const a = length / 2 - batterySpan / 2 + shiftOffset;
+        let barsPath = '';
+        for (let i = 0; i < bars; i++) {
+          const h = i % 2 === 0 ? 13.5 : 6.75;
+          barsPath += `M ${a + i * 6.75},${-h * sy} L ${a + i * 6.75},${h * sy} `;
+        }
+        path = `M 0,0 L ${a},0 M ${a + batterySpan},0 L ${length},0`;
+        shapeExtra = `<path d="${barsPath}" ${stroke}/>`;
+      }
+      let shape, fixedText = '';
+      const dpAnchors = {};
+      if (partDef && partDef.form === 'glyph') {
+        const c = length / 2 + shiftOffset;
+        const sx = 'reverse' in options ? -1 : 1;
+        // fixedParts glyphs are written in default SVG coordinates (body centred
+        // at x=54).
+        const flags = Object.assign(Object.create(null), options);
+        flags.contacts = !('contacts' in options) || options.contacts === 'True';
+        flags.nc = 'nc' in options && options.nc === 'True';
+        flags.link = !('link' in options) || options.link === 'True';
+        const body = partDef.body(stroke, color, flags);
+        // Double-pole switches draw their second pole below the terminal line in
+        // screen coordinates, so they never take the y flip. The glyphs are
+        // authored around x = 54 like the other fixedParts.
+        const bodyFlip = ['SwitchDpst', 'SwitchDpdt'].includes(type) ? 1 : sy;
+        // `scale` zooms the glyph about its centre; the leads still reach the
+        // element's terminals.
+        const half = partDef.half * zoom;
+        shape = `<g transform="translate(${c} 0) scale(${sx * zoom} ${bodyFlip * zoom}) translate(-54 0)">${body}</g>` +
+          `<path d="M 0,0 L ${c - half},0 M ${c + half},0 L ${length},0" ${stroke}/>`;
+        for (const t of partDef.texts || []) {
+          // Keep glyph text upright like Schemdraw: place it in world coordinates
+          // outside the rotated group.
+          const gx = c + sx * zoom * (t.x - 54), gy = sy * zoom * t.y;
+          const wx = x + dx * gx - dy * gy, wy = y + dy * gx + dx * gy;
+          fixedText += `<text x="${wx}" y="${wy}" text-anchor="middle" dominant-baseline="central"${textFill} font-family="sans-serif" font-size="${labelSize}">${escapeText(t.value)}</text>`;
+          bounds(wx - 14, wy - 14, wx + 14, wy + 14);
+        }
+      } else if (type === 'SourceI') {
+        // Source circle with an internal arrow indicating current direction.
+        const center = length / 2 + shiftOffset, lead = center - 18;
+        const sx = 'reverse' in options ? -1 : 1;
+        shape = `<circle cx="${center}" cy="0" r="18" fill="none" stroke="${color}" stroke-width="2"/><path d="M 0,0 L ${lead},0 M ${lead + 36},0 L ${length},0 M ${center - 9 * sx},0 L ${center},0" ${stroke}/><path d="M ${center + 7 * sx},0 L ${center},${2.7 * sy} L ${center},${-2.7 * sy} Z" fill="${color}"/>`;
+      } else if (type === 'Zener') {
         const center = length / 2 + shiftOffset, first = center - 6.3, second = center + 6.3;
         const sx = 'reverse' in options ? -1 : 1, sy = 'flip' in options ? -1 : 1;
         const glyph = 'M -6.3,-9 L 6.3,0 L -6.3,9 Z M 6.3,-9 L 6.3,9 M 6.3,-9 L 9.9,-12.6 M 6.3,9 L 2.7,12.6';
         shape = `<path d="M 0,0 L ${first},0 M ${second},0 L ${length},0" ${stroke}/><path d="${glyph}" transform="translate(${center} 0) scale(${sx} ${sy})" ${stroke}/>`;
       } else if (isSource && (length !== defaultUnit || shiftOffset !== 0)) {
-        const center = length / 2 + shiftOffset, lead = center - 18;
+        // Sources keep their circle centred; `scale` shrinks the circle and the
+        // internal marks, and the leads still reach the terminals.
+        const center = length / 2 + shiftOffset, radius = 18 * zoom, lead = center - radius;
         const glyph = path.replace(/^M 0,0 L 36,0 M 72,0 L 108,0\s*/, '');
-        const transform = 'reverse' in options ? `translate(${center + 54} 0) scale(-1 1)` : `translate(${center - 54} 0)`;
-        shape = `<circle cx="${center}" cy="0" r="18" fill="none" stroke="${color}" stroke-width="2"/><path d="M 0,0 L ${lead},0 M ${lead + 36},0 L ${length},0" ${stroke}/>${glyph ? `<path d="${glyph}" transform="${transform}" ${stroke}/>` : ''}`;
+        const transform = 'reverse' in options
+          ? `translate(${center + 54 * zoom} 0) scale(${-zoom} ${zoom})`
+          : `translate(${center - 54 * zoom} 0) scale(${zoom})`;
+        shape = `<circle cx="${center}" cy="0" r="${radius}" fill="none" stroke="${color}" stroke-width="2"/><path d="M 0,0 L ${lead},0 M ${lead + 2 * radius},0 L ${length},0" ${stroke}/>${glyph ? `<path d="${glyph}" transform="${transform}" ${stroke}/>` : ''}`;
       } else {
-        const circle = isSource ? `<circle cx="54" cy="0" r="18" fill="none" stroke="${color}" stroke-width="2"/>` : '';
-        const reflected = 'reverse' in options ? ' transform="translate(108 0) scale(-1 1)"' : '';
-        shape = type === 'Gap' ? '' : `${circle}<path d="${path}"${reflected} ${stroke}/>`;
+        // `scale` shrinks the circle itself when the source keeps its default length.
+        const circle = isSource
+          ? (zoom === 1
+            ? `<circle cx="54" cy="0" r="18" fill="none" stroke="${color}" stroke-width="2"/>`
+            : `<circle cx="54" cy="0" r="${18 * zoom}" fill="none" stroke="${color}" stroke-width="2"/>`)
+          : '';
+        const reflected = ('reverse' in options && !['Potentiometer', 'Rshunt', 'SCR', 'Triac', 'BjtNpn2', 'BjtPnp2', 'NMos2', 'PMos2', 'ResistorVar'].includes(type)) ? ' transform="translate(108 0) scale(-1 1)"' : '';
+        if (type === 'Gap') shape = '';
+        else if (zoom !== 1) {
+          // Zoom the fixed 108-unit glyph about its centre, then add leads.
+          const c = length / 2 + shiftOffset, half = 54 * zoom;
+          shape = `<g transform="translate(${c} 0) scale(${zoom}) translate(-54 0)">${circle}<path d="${path}"${reflected} ${stroke}/></g>` +
+            `<path d="M 0,0 L ${c - half},0 M ${c + half},0 L ${length},0" ${stroke}/>`;
+        } else shape = `${circle}<path d="${path}"${reflected} ${stroke}/>`;
       }
+      // Polarity marker for Capacitor(polar=True). Schemdraw appends
+      // `SegmentText((-capgap*1.2, capgap), '+')` relative to the glyph origin,
+      // which sits on the left plate. The element centre is capgap/2 further
+      // along, so the sign sits capgap/2 + capgap*1.2 before the centre and
+      // capgap above the axis (y up). capgap = 0.18.
+      if (type === 'Capacitor' && options.polar === 'True') {
+        const capgap = 0.18;
+        const plusX = (capgap / 2 + capgap * 1.2) * 36;
+        const localX = length / 2 + ('reverse' in options ? plusX : -plusX) + shiftOffset;
+        const localY = -capgap * 36 * sy;
+        // The text lives inside the element's rotate() group, so keep it local.
+        shapeExtra += `<text x="${localX}" y="${localY}" text-anchor="middle" dominant-baseline="central"${textFill} font-family="sans-serif" font-size="${labelSize}">+</text>`;
+      }
+      // Core bar for Inductor(core=True): Schemdraw's extra segment at y = 0.25 unit.
+      if (type === 'Inductor' && options.core === 'True') {
+        const c2 = length / 2 + shiftOffset;
+        shapeExtra += `<path d="M ${c2 - 18},${-9 * sy} L ${c2 + 18},${-9 * sy}" ${stroke}/>`;
+      }
+      // Filled body for Diode / LED (`fill=True` or a colour name).
+      if ((type === 'Diode' || type === 'LED') && 'fill' in options) {
+        const fillColor = options.fill === 'True' ? color : readColor(options.fill);
+        const reflected = 'reverse' in options ? ' transform="translate(108 0) scale(-1 1)"' : '';
+        shapeExtra += `<g${reflected}><polygon points="47.7,${-9 * sy} 60.3,0 47.7,${9 * sy}" fill="${fillColor}" stroke="${color}" stroke-width="2" stroke-linejoin="round"/></g>`;
+      }
+      if (shapeExtra) shape += shapeExtra;
       if (type === 'Line' && 'arrow' in options) {
         const arrow = options.arrow;
-        if (arrow.includes('<')) shape += `<path d="M 0,0 L 9,2.7 L 9,-2.7 Z" fill="${color}" stroke="${color}"/>`;
-        if (arrow.includes('>')) shape += `<path d="M ${length},0 L ${length - 9},2.7 L ${length - 9},-2.7 Z" fill="${color}" stroke="${color}"/>`;
+        shape = `<path d="M ${arrow.includes('<') ? 9 : 0},0 L ${arrow.includes('>') ? length - 9 : length},0" ${stroke}/>`;
+        if (arrow.includes('<')) shape += `<path d="M 2,0 L 9,2.7 L 9,-2.7 Z" fill="${color}"/>`;
+        if (arrow.includes('>')) shape += `<path d="M ${length - 2},0 L ${length - 9},2.7 L ${length - 9},-2.7 Z" fill="${color}"/>`;
         if (arrow.startsWith('|')) shape += `<path d="M 0,-2.7 L 0,2.7" ${stroke}/>`;
         if (arrow.endsWith('o')) shape += `<circle cx="${length}" cy="0" r="2.7" fill="${color}" stroke="${color}" stroke-width="2"/>`;
         // Short lines can put arrow bases beyond the opposite terminal.
@@ -571,6 +4708,7 @@
         }
       }
       if (shape) elements.push(`<g transform="translate(${x} ${y}) rotate(${angle})">${shape}</g>`);
+      if (fixedText) elements.push(fixedText);
       bounds(x - 12, y - 12, endX + 12, endY + 12);
       bounds(x + 12, y + 12, endX - 12, endY - 12);
       if (shiftOffset !== 0 || type === 'Zener') {
@@ -583,21 +4721,227 @@
           }
         }
       }
+      if (['Potentiometer', 'Rshunt', 'SCR', 'Triac', 'LED', 'Diac', 'Fuse', 'Battery', 'BatteryCell', 'BatteryDouble'].includes(type)) {
+        const c = length / 2 + shiftOffset;
+        const first = c - 6.3, a = c - batterySpan / 2;
+        let lx1, lx2, ly1, ly2;
+        if (type === 'Potentiometer') {
+          lx1 = c - 20; lx2 = c + 20;
+          if (sy === 1) { ly1 = -tapH - 4; ly2 = 12; } else { ly1 = -12; ly2 = tapH + 4; }
+        } else if (type === 'Rshunt') {
+          lx1 = c - 35; lx2 = c + 35;
+          ly1 = sy === 1 ? -12 : -20; ly2 = sy === 1 ? 20 : 12;
+        } else if (type === 'SCR') {
+          lx1 = c - 9; lx2 = c + 21;
+          ly1 = sy === 1 ? -12 : -20; ly2 = sy === 1 ? 20 : 12;
+        } else if (type === 'Triac') {
+          lx1 = c - 9; lx2 = c + 28; ly1 = -20; ly2 = 20;
+        } else if (type === 'LED') {
+          lx1 = first - 3; lx2 = first + 20;
+          ly1 = sy === 1 ? -30 : -12; ly2 = sy === 1 ? 12 : 30;
+        } else if (type === 'Diac') {
+          lx1 = first - 3; lx2 = first + 16; ly1 = -20; ly2 = 20;
+        } else if (type === 'Fuse') {
+          lx1 = c - 20; lx2 = c + 20; ly1 = -11; ly2 = 11;
+        } else {
+          lx1 = a - 3; lx2 = a + batterySpan + 3; ly1 = -16; ly2 = 16;
+        }
+        if ('reverse' in options) { [lx1, lx2] = [2 * c - lx2, 2 * c - lx1]; }
+        for (const [lx, ly] of [[lx1, ly1], [lx1, ly2], [lx2, ly1], [lx2, ly2]]) {
+          const bx = x + dx * lx - dy * ly, by = y + dy * lx + dx * ly;
+          bounds(bx, by, bx, by);
+        }
+      }
+      if (['BjtNpn2', 'BjtPnp2', 'BjtPnp2c2'].includes(type)) {
+        const c = length / 2 + shiftOffset;
+        const ly1 = sy === 1 ? -34 : 0, ly2 = sy === 1 ? 4 : 34;
+        for (const [lx, ly] of [[c - 22, ly1], [c - 22, ly2], [c + 22, ly1], [c + 22, ly2]]) {
+          const bx = x + dx * lx - dy * ly, by = y + dy * lx + dx * ly;
+          bounds(bx, by, bx, by);
+        }
+      }
+      if (['JFetN2', 'JFetP2'].includes(type)) {
+        const c = length / 2 + shiftOffset;
+        const ly1 = sy === 1 ? -36 : 2, ly2 = sy === 1 ? 2 : 36;
+        for (const [lx, ly] of [[c - 30, ly1], [c - 30, ly2], [c + 30, ly1], [c + 30, ly2]]) {
+          const bx = x + dx * lx - dy * ly, by = y + dy * lx + dx * ly;
+          bounds(bx, by, bx, by);
+        }
+      }
+      if (['CurrentMirror', 'VoltageMirror'].includes(type)) {
+        const c = length / 2 + shiftOffset;
+        for (const [lx, ly] of [[c - 20, -20], [c - 20, 20], [c + 20, -20], [c + 20, 20]]) {
+          const bx = x + dx * lx - dy * ly, by = y + dy * lx + dx * ly;
+          bounds(bx, by, bx, by);
+        }
+      }
+      if (type === 'Breaker') {
+        const c = length / 2 + shiftOffset;
+        const ly1 = sy === 1 ? -16 : 2, ly2 = sy === 1 ? 2 : 16;
+        for (const [lx, ly] of [[c - 20, ly1], [c - 20, ly2], [c + 20, ly1], [c + 20, ly2]]) {
+          const bx = x + dx * lx - dy * ly, by = y + dy * lx + dx * ly;
+          bounds(bx, by, bx, by);
+        }
+      }
+      if (['CPE', 'Nullator', 'Norator'].includes(type)) {
+        const c = length / 2 + shiftOffset;
+        for (const [lx, ly] of [[c - 20, -12], [c - 20, 12], [c + 20, -12], [c + 20, 12]]) {
+          const bx = x + dx * lx - dy * ly, by = y + dy * lx + dx * ly;
+          bounds(bx, by, bx, by);
+        }
+      }
+      if (['ResistorVar', 'ResistorVarIEC', 'ResistorVarIEEE'].includes(type)) {
+        const c = length / 2 + shiftOffset;
+        for (const [lx, ly] of [[c - 20, -24], [c - 20, 24], [c + 20, -24], [c + 20, 24]]) {
+          const bx = x + dx * lx - dy * ly, by = y + dy * lx + dx * ly;
+          bounds(bx, by, bx, by);
+        }
+      }
+      if (['Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE'].includes(type)) {
+        const c = length / 2 + shiftOffset;
+        for (const [lx, ly] of [[c - 20, -30], [c - 20, 20], [c + 20, -30], [c + 20, 20]]) {
+          const bx = x + dx * lx - dy * ly, by = y + dy * lx + dx * ly;
+          bounds(bx, by, bx, by);
+        }
+      }
+      if (type === 'Capacitor2') {
+        const c = length / 2 + shiftOffset;
+        for (const [lx, ly] of [[c - 16, -26], [c - 16, 26], [c + 16, -26], [c + 16, 26]]) {
+          const bx = x + dx * lx - dy * ly, by = y + dy * lx + dx * ly;
+          bounds(bx, by, bx, by);
+        }
+      }
+      if (['DiodeTVS', 'Josephson'].includes(type)) {
+        const c = length / 2 + shiftOffset;
+        for (const [lx, ly] of [[c - 18, -14], [c - 18, 14], [c + 18, -14], [c + 18, 14]]) {
+          const bx = x + dx * lx - dy * ly, by = y + dy * lx + dx * ly;
+          bounds(bx, by, bx, by);
+        }
+      }
+      if (['Photoresistor', 'PhotoresistorBox', 'PhotoresistorIEC', 'PhotoresistorIEEE'].includes(type)) {
+        const c = length / 2 + shiftOffset;
+        for (const [lx, ly] of [[c - 20, -32], [c - 20, 12], [c + 20, -32], [c + 20, 12]]) {
+          const bx = x + dx * lx - dy * ly, by = y + dy * lx + dx * ly;
+          bounds(bx, by, bx, by);
+        }
+      }
+      if (type === 'Coax' || type === 'Triax') {
+        const c = length / 2 + shiftOffset;
+        const h = type === 'Coax' ? coaxRadius + 10 : 30;
+        for (const [lx, ly] of [[c - 60, -h], [c - 60, h], [c + 60, -h], [c + 60, h]]) {
+          const bx = x + dx * lx - dy * ly, by = y + dy * lx + dx * ly;
+          bounds(bx, by, bx, by);
+        }
+      }
+      if (type === 'Motor') {
+        const c = length / 2 + shiftOffset;
+        for (const [lx, ly] of [[c - 30, -22], [c - 30, 22], [c + 30, -22], [c + 30, 22]]) {
+          const bx = x + dx * lx - dy * ly, by = y + dy * lx + dx * ly;
+          bounds(bx, by, bx, by);
+        }
+      }
+      if (['NMos2', 'PMos2'].includes(type)) {
+        const c = length / 2 + shiftOffset;
+        const ly1 = sy === 1 ? -2 : -34, ly2 = sy === 1 ? 34 : 2;
+        for (const [lx, ly] of [[c - 33, ly1], [c - 33, ly2], [c + 33, ly1], [c + 33, ly2]]) {
+          const bx = x + dx * lx - dy * ly, by = y + dy * lx + dx * ly;
+          bounds(bx, by, bx, by);
+        }
+      }
+      if (['NFet2', 'PFet2'].includes(type)) {
+        const c = length / 2 + shiftOffset;
+        const ly1 = sy === 1 ? -52 : 2, ly2 = sy === 1 ? 2 : 52;
+        for (const [lx, ly] of [[c - 30, ly1], [c - 30, ly2], [c + 30, ly1], [c + 30, ly2]]) {
+          const bx = x + dx * lx - dy * ly, by = y + dy * lx + dx * ly;
+          bounds(bx, by, bx, by);
+        }
+      }
+      if (partDef && partDef.form === 'glyph') {
+        const c = length / 2 + shiftOffset, [ex1, ex2, ey1, ey2] = partDef.extent;
+        for (const [lx, ly] of [[c + zoom * (ex1 - 54), ey1 * sy * zoom], [c + zoom * (ex1 - 54), ey2 * sy * zoom], [c + zoom * (ex2 - 54), ey1 * sy * zoom], [c + zoom * (ex2 - 54), ey2 * sy * zoom]]) {
+          const bx = x + dx * lx - dy * ly, by = y + dy * lx + dx * ly;
+          bounds(bx, by, bx, by);
+        }
+      }
       if (arbitraryAngle) bounds(centerX - 20, centerY - 20, centerX + 20, centerY + 20);
       if (isSource) bounds(bodyCenterX - 20, bodyCenterY - 20, bodyCenterX + 20, bodyCenterY + 20);
-      if ('idot' in options) elements.push(`<circle cx="${x}" cy="${y}" r="3.6" fill="${color}"/>`);
-      if ('dot' in options) elements.push(`<circle cx="${endX}" cy="${endY}" r="3.6" fill="${color}"/>`);
+      // dot / idot draw at the element ends; "open" leaves the circle hollow.
+      for (const [key, px, py] of [['idot', x, y], ['dot', endX, endY]]) {
+        if (!(key in options)) continue;
+        if (options[key] === 'open') {
+          whiteMarker(px, py, 3.6, color);
+        } else elements.push(`<circle cx="${px}" cy="${py}" r="3.6" fill="${color}"/>`);
+      }
       for (const label of labels) {
         if (label.items) {
-          label.items.forEach((text, i) => {
-            const fraction = (i + 1) / (label.items.length + 1);
-            const lx = x + dx * (length * fraction + shiftOffset) + (arbitraryAngle ? dy * 19 : dy ? -13 : 0);
-            const ly = y + dy * (length * fraction + shiftOffset) + (arbitraryAngle ? -dx * 19 + 5 : dy ? 5 : -19);
+          // Schemdraw distributes a list label along one edge of the element.
+          // `loc` picks the edge; like schemdraw, the side is mirrored when the
+          // element points left/down so the list keeps the same visual side.
+          const listTheta = arbitraryAngle ? direction : ({ right: 0, up: 90, left: 180, down: -90 })[direction];
+          const listNorm = ((listTheta % 360) + 360) % 360;
+          let listLoc = label.loc || 'top';
+          if (listNorm > 90 && listNorm <= 270) {
+            listLoc = { top: 'bot', bot: 'top', bottom: 'top', left: 'right', right: 'left' }[listLoc] || listLoc;
+          }
+          const perp = arbitraryAngle ? 19 : dy ? 13 : 19;
+          const ofst = Array.isArray(label.ofst) ? label.ofst : [0, label.ofst == null ? 0 : label.ofst];
+          const size = label.fontsize === undefined ? 14 : label.fontsize;
+          const items = label.items;
+          items.forEach((text, i) => {
+            const fraction = (i + 1) / (items.length + 1);
+            let along = length * fraction + shiftOffset, across = 0;
+            if (listLoc === 'top') across = -perp;
+            else if (listLoc === 'bot' || listLoc === 'bottom') across = perp;
+            else if (listLoc === 'center') across = 0;
+            else if (listLoc === 'left' || listLoc === 'right') {
+              // Left / right edges run across the element, as in schemdraw.
+              along = listLoc === 'left' ? 0 : length;
+              across = ((i + 1) / (items.length + 1)) * 18 - 9;
+            }
+            let lx = x + dx * along - dy * across;
+            let ly = y + dy * along + dx * across;
+            if (arbitraryAngle || dy) ly += 5;
+            lx += ofst[0] * 36;
+            ly -= ofst[1] * 36;
+            // Offset direction decides the text anchor and baseline.
+            const offX = -dy * across, offY = dx * across;
+            const horizontalSide = Math.abs(offX) > Math.abs(offY);
+            const anchor = label.halign ? { left: 'start', center: 'middle', right: 'end' }[label.halign]
+              : arbitraryAngle ? 'end'
+                : dy ? (offX < 0 ? 'end' : 'start')
+                  : 'middle';
+            const baseline = listLoc === 'center' ? ' dominant-baseline="central"'
+              : horizontalSide ? '' : offY < 0 ? '' : ' dominant-baseline="hanging"';
             const visible = text.startsWith('$') && text.endsWith('$') ? text.replace(/[$_{}]/g, '') : text;
-            const width = Math.max(12, Array.from(visible).length * 10);
-            bounds(lx - width, ly - 18, lx + (dy ? 0 : width), ly + 8);
-            elements.push(`<text x="${lx}" y="${ly}" text-anchor="${dy ? 'end' : 'middle'}"${textFill} font-family="sans-serif" font-size="14">${labelContent(text)}</text>`);
+            const width = Math.max(12, Array.from(visible).length * size * 0.71);
+            bounds(lx - width, ly - size, lx + width, ly + size);
+            elements.push(`<text x="${lx}" y="${ly}" text-anchor="${anchor}"${baseline}${label.color ? ` fill="${label.color}"` : textFill} font-family="sans-serif" font-size="${size}">${labelContent(text)}</text>`);
           });
+          continue;
+        }
+        if (type === 'Resistor' && (!label.loc || label.loc === 'top')) {
+          const theta = arbitraryAngle ? direction : ({ right: 0, up: 90, left: 180, down: -90 })[direction];
+          const norm = ((theta % 360) + 360) % 360;
+          const flipped = norm > 90 && norm <= 270;
+          const locSign = flipped ? -1 : 1;
+          const ofst = label.ofst == null ? 0.1 : label.ofst;
+          let ox = 0, oy = 0;
+          if (Array.isArray(ofst)) { ox = ofst[0] * 36; oy = -ofst[1] * 36; }
+          else oy = -locSign * ofst * 36;
+          const localX = length / 2 + shiftOffset + ox, localY = -locSign * 9 + oy;
+          const lx = x + dx * localX - dy * localY, ly = y + dy * localX + dx * localY;
+          if (!Number.isFinite(lx) || !Number.isFinite(ly)) throw new Error('label position is too large.');
+          let rotation = label.rotate === true ? norm : typeof label.rotate === 'number' ? ((label.rotate % 360) + 360) % 360 : 0;
+          if (label.rotate === true && rotation > 90 && rotation < 270) rotation -= 180;
+          const relative = ((theta - rotation + (flipped ? 180 : 0)) % 360 + 360) % 360;
+          const alignment = [ ['middle','ideographic'], ['end','ideographic'], ['end','central'], ['end','hanging'], ['middle','hanging'], ['start','hanging'], ['start','central'], ['start','ideographic'] ][Math.round(relative / 45) % 8];
+          const [anchor, baseline] = alignment;
+          const visible = label.text.startsWith('$') && label.text.endsWith('$') ? label.text.replace(/[$_{}]/g, '') : label.text;
+          const width = Math.max(12, Array.from(visible).length * 10);
+          const extent = rotation ? width + 18 : Math.max(width, 18);
+          bounds(lx - extent, ly - extent, lx + extent, ly + extent);
+          const transform = rotation ? ` transform="rotate(${-rotation} ${lx} ${ly})"` : '';
+          elements.push(`<text x="${lx}" y="${ly - labelSize}" text-anchor="${anchor}" dominant-baseline="${baseline}"${transform}${textFill} font-family="sans-serif" font-size="${labelSize}"><tspan x="${lx}" dy="${labelSize}">${labelContent(label.text)}</tspan></text>`);
           continue;
         }
         if (type === 'Line' && label.loc === 'right' && dx === 1 && dy === 0) {
@@ -605,51 +4949,254 @@
           const visible = label.text.startsWith('$') && label.text.endsWith('$') ? label.text.replace(/[$_{}]/g, '') : label.text;
           const width = Math.max(12, Array.from(visible).length * 10);
           bounds(lx, ly - 12, lx + width, ly + 12);
-          elements.push(`<text x="${lx}" y="${ly - 14}" text-anchor="start" dominant-baseline="central"${textFill} font-family="sans-serif" font-size="14"><tspan x="${lx}" dy="14">${labelContent(label.text)}</tspan></text>`);
+          elements.push(`<text x="${lx}" y="${ly - labelSize}" text-anchor="start" dominant-baseline="central"${textFill} font-family="sans-serif" font-size="${labelSize}"><tspan x="${lx}" dy="${labelSize}">${labelContent(label.text)}</tspan></text>`);
           continue;
         }
-        const loc = label.loc || (arbitraryAngle ? 'top' : dy ? 'left' : 'top');
+        let loc = label.loc || (['BjtNpn2', 'BjtPnp2', 'BjtPnp2c2', 'NMos2', 'PMos2', 'NFet2', 'PFet2', 'JFetN2', 'JFetP2'].includes(type)
+          ? (arbitraryAngle ? 'top' : dy ? 'left' : ('flip' in options ? 'top' : 'bot'))
+          : ((['Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE', 'LED', 'LED2', 'Photodiode'].includes(type)) && !dy) ? 'bot' : arbitraryAngle ? 'top' : dy ? 'left' : 'top');
+        if (loc === 'bottom') loc = 'bot';
+        // Schemdraw keeps `top`/`bottom` on the same visual side: for an element
+        // pointing up or down they are the long sides, not above/below.
+        const verticalSide = Math.abs(dy) > Math.abs(dx);
+        if (verticalSide) {
+          if (loc === 'top') loc = 'left';
+          else if (loc === 'bot') loc = 'right';
+        }
+        // `rotate=True` turns the label with the element (schemdraw keeps it
+        // upright by mirroring angles in the lower half).
+        let rotation = 0;
+        if (label.rotate === true) {
+          const labelTheta = arbitraryAngle ? direction : ({ right: 0, up: 90, left: 180, down: -90 })[direction];
+          rotation = ((labelTheta % 360) + 360) % 360;
+          if (rotation > 90 && rotation < 270) rotation -= 180;
+        } else if (typeof label.rotate === 'number') rotation = ((label.rotate % 360) + 360) % 360;
+        const rotated = rotation !== 0;
         let lx = bodyCenterX, ly = bodyCenterY, anchor = 'middle';
         if (loc === 'top') {
-          const offset = isSource ? 29 : 19;
+          const offset = isSource ? 29 : ['NMos2', 'PMos2'].includes(type) ? 40 : 19;
           if (arbitraryAngle) {
-            const angledOffset = isSource ? 22 : 12.6;
+            const angledOffset = isSource ? 22 : ['NMos2', 'PMos2'].includes(type) ? 30 : 12.6;
             lx += dy * angledOffset; ly -= dx * angledOffset;
           }
           else ly -= offset;
         }
         if (loc === 'bot') {
           if (arbitraryAngle) { lx -= dy * 19; ly += dx * 19 + 5; }
-          else ly += 24;
+          else ly += ['NMos2', 'PMos2'].includes(type) ? 40 : 24;
         }
-        if (loc === 'left') { lx = Math.min(x, endX) - (dy ? (isSource ? 22 : 13) : 6); ly += 5; anchor = 'end'; }
-        if (loc === 'right') { lx = Math.max(x, endX) + (dy ? 13 : 6); ly += 5; anchor = 'start'; }
+        // A rotated label is centred on its anchor; the side nudges below only
+        // apply to horizontal text.
+        // A source's side label clears its circle: schemdraw uses radius * 1.2.
+        const sideGap = dy ? (isSource ? 18 * zoom * 1.2 : 13) : 6;
+        if (loc === 'left') { lx = Math.min(x, endX) - sideGap; ly += rotated || isSource ? 0 : 5; anchor = rotated ? 'middle' : 'end'; }
+        if (loc === 'right') { lx = Math.max(x, endX) + sideGap; ly += rotated || isSource ? 0 : 5; anchor = rotated ? 'middle' : 'start'; }
+        // `ofst` is in element coordinates: x along the element, y perpendicular
+        // (positive is the element's "up"). A single number moves away from the
+        // side chosen by `loc`, as in schemdraw.
+        if (label.ofst != null) {
+          if (Array.isArray(label.ofst)) {
+            const [ox, oy] = label.ofst;
+            lx += (dx * ox + dy * oy) * 36;
+            ly += (dy * ox - dx * oy) * 36;
+          } else {
+            const o = label.ofst * 36;
+            if (loc === 'top') ly -= o;
+            else if (loc === 'bot') ly += o;
+            else if (loc === 'left') lx -= o;
+            else if (loc === 'right') lx += o;
+          }
+        }
+        if (rotated) {
+          // A rotated label is centred on its anchor, so push it out by half
+          // the text height to keep the glyphs clear of the element body.
+          const half = labelSize * 0.5;
+          const ox = lx - bodyCenterX, oy = ly - bodyCenterY;
+          const len = Math.hypot(ox, oy);
+          if (len > 0) { lx += ox / len * half; ly += oy / len * half; }
+        }
+        if (label.halign) anchor = { left: 'start', center: 'middle', right: 'end' }[label.halign];
+        if (label.valign) {
+          // The text baseline is set below; `bottom` is the SVG default.
+        }
         const visible = label.text.startsWith('$') && label.text.endsWith('$') ? label.text.replace(/[$_{}]/g, '') : label.text;
         const width = Math.max(12, Array.from(visible).length * 10);
         bounds(lx - (anchor === 'start' ? 0 : anchor === 'end' ? width : width / 2), ly - 18,
           lx + (anchor === 'end' ? 0 : anchor === 'start' ? width : width / 2), ly + 8);
-        const baseline = arbitraryAngle && loc === 'top' ? ' dominant-baseline="ideographic"' : '';
-        elements.push(`<text x="${lx}" y="${ly}" text-anchor="${anchor}"${baseline}${textFill} font-family="sans-serif" font-size="14">${labelContent(label.text)}</text>`);
+        const baseline = label.valign === 'top' ? ' dominant-baseline="hanging"'
+          : label.valign === 'center' ? ' dominant-baseline="central"'
+            : label.valign === 'bottom' ? ''
+              : rotated || (isSource && (loc === 'left' || loc === 'right')) ? ' dominant-baseline="central"'
+                : arbitraryAngle && loc === 'top' ? ' dominant-baseline="ideographic"' : '';
+        const transform = rotation ? ` transform="rotate(${-rotation} ${lx} ${ly})"` : '';
+        elements.push(`<text x="${lx}" y="${ly}" text-anchor="${anchor}"${baseline}${transform}${textFill} font-family="sans-serif" font-size="${labelSize}">${labelContent(label.text)}</text>`);
       }
-      if (name) names[name] = { start: [startX, startY], end: [endX, endY], center: [centerX, centerY] };
-      log(`${type}: ${arbitraryAngle ? 'theta=' + direction : direction}${labels.length ? '、ラベル: ' + labels.map(l => l.items ? l.items.join(', ') : l.text).join(', ') : ''}`);
+      // Redraw white contact dots above all leads. Schemdraw draws these
+      // circles with a higher zorder, so later wires do not show through.
+      const switchContacts = !('contacts' in options) || options.contacts === 'True';
+      const markerWorld = (lx, ly) => [x + dx * lx - dy * ly, y + dy * lx + dx * ly];
+      const contactPoints = [];
+      if (type === 'Switch' && switchContacts) {
+        const c = length / 2 + shiftOffset;
+        contactPoints.push([c - 13.68, 0], [c + 13.68, 0]);
+      }
+      if (type === 'SwitchSpdt') {
+        const pts = twoTerminalLocalAnchors(type, length, shiftOffset, sy, options);
+        contactPoints.push(pts.a, pts.b);
+        if (switchContacts) contactPoints.push(pts.c);
+      }
+      if (type === 'SwitchDpst' || type === 'SwitchDpdt') {
+        if (switchContacts) {
+          const pts = twoTerminalLocalAnchors(type, length, shiftOffset, sy, options);
+          for (const key of ['p1', 'p2', 't1', 't2', 't3', 't4']) if (pts[key]) contactPoints.push(pts[key]);
+        }
+      }
+      if (type === 'FuseUS') contactPoints.push([33.84, 0], [74.16, 0]);
+      for (const [contactX, contactY] of contactPoints) {
+        const [wx, wy] = markerWorld(contactX, contactY);
+        whiteMarker(wx, wy, 4.32, color);
+      }
+      if (name) {
+        const anchors = { start: [startX, startY], end: [endX, endY], center: [centerX, centerY] };
+        const local = (lx, ly) => [x + dx * lx - dy * ly, y + dy * lx + dx * ly];
+        const bodyCenter = length / 2 + shiftOffset;
+        const mx = lx => 'reverse' in options ? 2 * bodyCenter - lx : lx;
+        if (['Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE'].includes(type)) anchors.tap = local(mx(bodyCenter), -tapH * sy);
+        if (type === 'Rshunt') { anchors.v1 = local(mx(bodyCenter - 31.5), 18 * sy); anchors.v2 = local(mx(bodyCenter + 31.5), 18 * sy); }
+        if (type === 'SCR') anchors.gate = local(mx(bodyCenter + 17.1), 18 * sy);
+        if (type === 'Triac') anchors.gate = local(mx(bodyCenter + 24.3), -18 * sy);
+        if (type === 'BatteryDouble') anchors.tap = local(bodyCenter - batterySpan / 2 + 27, -13.5 * sy);
+        if (type === 'BjtNpn2' || type === 'BjtPnp2' || type === 'BjtPnp2c2') {
+          anchors.base = local(bodyCenter, -28.62 * sy);
+          const emitterAtEnd = (type !== 'BjtNpn2') !== ('reverse' in options);
+          anchors.emitter = emitterAtEnd ? [endX, endY] : [startX, startY];
+          anchors.collector = emitterAtEnd ? [startX, startY] : [endX, endY];
+          if (type === 'BjtPnp2c2') anchors.C2 = local(bodyCenter + ('reverse' in options ? 10.8 : -10.8), 0);
+        }
+        if (type === 'NMos2' || type === 'PMos2') {
+          const gateOffset = (type === 'NMos2' ? 12 : -12) * ('reverse' in options ? -1 : 1);
+          anchors.gate = local(bodyCenter + gateOffset, 30 * sy);
+          const sourceAtBodyEnd = (type === 'NMos2') !== ('reverse' in options);
+          anchors.source = local(sourceAtBodyEnd ? bodyCenter + 30 : bodyCenter - 30, 0);
+          anchors.drain = local(sourceAtBodyEnd ? bodyCenter - 30 : bodyCenter + 30, 0);
+          anchors.S = anchors.source;
+          anchors.D = anchors.drain;
+        }
+        if (type === 'NFet2' || type === 'PFet2') {
+          const sourceAtEnd = !('reverse' in options);
+          anchors.gate = local(bodyCenter, -49.2 * sy);
+          anchors.source = sourceAtEnd ? [endX, endY] : [startX, startY];
+          anchors.drain = sourceAtEnd ? [startX, startY] : [endX, endY];
+          anchors.S = anchors.source;
+          anchors.D = anchors.drain;
+          if (bulk) anchors.bulk = local(bodyCenter, 0);
+        }
+        if (type === 'JFetN2' || type === 'JFetP2') {
+          const gateOffset = 9 * ('reverse' in options ? -1 : 1);
+          anchors.gate = local(bodyCenter + gateOffset, -33 * sy);
+          const sourceAtEnd = !('reverse' in options);
+          anchors.source = sourceAtEnd ? [endX, endY] : [startX, startY];
+          anchors.drain = sourceAtEnd ? [startX, startY] : [endX, endY];
+          anchors.S = anchors.source;
+          anchors.D = anchors.drain;
+        }
+        if (type === 'CurrentMirror' || type === 'VoltageMirror') {
+          const offset = type === 'CurrentMirror'
+            ? Math.sqrt(0.3 * 0.3 - 0.2 * 0.2) * 36
+            : Math.sqrt(1 - 0.2 * 0.2 / (0.3 * 0.3)) * 0.15 * 36;
+          anchors.common = local(bodyCenter, -offset * sy);
+        }
+        if (type === 'SwitchSpdt') {
+          // Schemdraw: a at the pivot, b on the second throw, c on the throw
+          // above (flip/reverse move them with the glyph).
+          const contacts = !('contacts' in options) || options.contacts === 'True';
+          const a = contacts ? bodyCenter - 13.68 : bodyCenter - 18;
+          const b = contacts ? bodyCenter + 13.68 : bodyCenter + 18;
+          anchors.a = local(mx(a), 0);
+          anchors.b = local(mx(b), 0);
+          anchors.c = local(mx(b), -25.2 * sy);
+        }
+        if (type === 'SwitchSpdt2') {
+          const contacts = options.contacts !== false;
+          const left = contacts ? bodyCenter - 49.68 : bodyCenter - 54;
+          const right = contacts ? bodyCenter - 22.32 : bodyCenter - 18;
+          anchors.a = local(mx(left), 0);
+          anchors.b = local(mx(right), -14.4 * sy);
+          anchors.c = local(mx(right), 14.4 * sy);
+        }
+        if (type === 'SwitchDpst' || type === 'SwitchDpdt') {
+          // Pole 1 sits on the terminal line, pole 2 one unit below it. The
+          // body is drawn centred at x = 54 with the poles at 4.32/31.68, so
+          // the anchors use the same offsets and follow flip via `sy`.
+          const contacts = options.contacts !== false;
+          const dpdt = type === 'SwitchDpdt';
+          const pole2 = dpdt ? 50.4 : 36;
+          const right = contacts ? 31.68 : 36;
+          // Positions are relative to the first pole (x = 4.32, y = 0).
+          const px = contacts ? 4.32 : 0;
+          const ax = lx => mx(bodyCenter - 54 + px + (lx - 4.32));
+          dpAnchors.p1 = local(ax(4.32), 0);
+          dpAnchors.t1 = local(ax(right - px + 4.32), dpdt ? -14.4 * sy : 0);
+          if (dpdt) dpAnchors.t2 = local(ax(right - px + 4.32), 14.4 * sy);
+          dpAnchors.p2 = local(ax(4.32), pole2 * sy);
+          if (!dpdt) dpAnchors.t2 = local(ax(right - px + 4.32), pole2 * sy);
+          dpAnchors.t3 = local(ax(right - px + 4.32), dpdt ? (pole2 - 14.4) * sy : pole2 * sy);
+          if (dpdt) dpAnchors.t4 = local(ax(right - px + 4.32), (pole2 + 14.4) * sy);
+        }
+        if (type === 'Inductor2') {
+          const a = bodyCenter - 18, b = bodyCenter + 18;
+          anchors.NW = local(mx(a), -22.32 * sy);
+          anchors.NE = local(mx(b), -22.32 * sy);
+          anchors.SW = local(mx(a), 18 * sy);
+          anchors.SE = local(mx(b), 18 * sy);
+          anchors.istart = local(a, 0);
+          anchors.iend = local(b, 0);
+          anchors.xy = local(a, 0);
+        }
+        if (type === 'Coax') {
+          const L = length, l = coaxLead, r = coaxRadius;
+          anchors.shieldstart = local(mx(l), -r * sy);
+          anchors.shieldstart_top = local(mx(l), r * sy);
+          anchors.shieldend = local(mx(L - l), -r * sy);
+          anchors.shieldend_top = local(mx(L - l), r * sy);
+          anchors.shieldcenter = local(mx(L / 2), -r * sy);
+          anchors.shieldcenter_top = local(mx(L / 2), r * sy);
+        }
+        if (type === 'Triax') {
+          anchors.guardstart = local(mx(21.6), -10.8 * sy);
+          anchors.guardstart_top = local(mx(21.6), 10.8 * sy);
+          anchors.guardend = local(mx(86.4), -10.8 * sy);
+          anchors.guardend_top = local(mx(86.4), 10.8 * sy);
+          anchors.shieldstart = local(mx(32.4), -21.6 * sy);
+          anchors.shieldstart_top = local(mx(32.4), 21.6 * sy);
+          anchors.shieldend = local(mx(75.6), -21.6 * sy);
+          anchors.shieldend_top = local(mx(75.6), 21.6 * sy);
+          anchors.shieldcenter = local(mx(54), -21.6 * sy);
+          anchors.shieldcenter_top = local(mx(54), 21.6 * sy);
+        }
+        Object.assign(anchors, dpAnchors);
+        names[name] = anchors;
+        namedTypes[name] = type;
+        namedDirs[name] = [dx, dy];
+        namedBoxes[name] = { ...elemBox };
+        namedReversed[name] = 'reverse' in options;
+      }
+      log(`${type}: ${arbitraryAngle ? 'theta=' + direction : direction}${labels.length ? ', labels: ' + labels.map(l => l.items ? l.items.join(', ') : l.text).join(', ') : ''}`);
       x = endX; y = endY;
       // Element.hold() keeps this element's placement point, but retains its
       // resulting drawing direction; unlike a hold block it is not a state pop.
-      if ('hold' in options) { x = startX; y = startY; }
+      if ('hold' in options) { x = placementX; y = placementY; }
     }
-    const padding = 8;
-    const viewBox = `${minX - padding} ${minY - padding} ${maxX - minX + 2 * padding} ${maxY - minY + 2 * padding}`;
-    log('SVG を生成しました。');
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}" role="img" aria-label="回路図">${elements.join('')}</svg>`;
+    if (overlay.length) elements.push(...overlay);
+    return { elements, names, namedBoxes, blockAnchors, x, y, direction, minX, minY, maxX, maxY, labelSize, unit, inchesPerUnit };
   }
 
   // Split only on braces outside quoted arguments and comment lines. In
   // particular, braces in math labels such as "$R_{in}$" are not block braces.
   function splitDocument(source) {
-    if (typeof source !== 'string') throw new TypeError('ソースは文字列で指定してください。');
-    const circuits = [];
-    let lines = null, depth = 0, layout = null, titles = null;
+    if (typeof source !== 'string') throw new TypeError('source must be a string.');
+    const circuits = [], subs = Object.create(null);
+    let lines = null, depth = 0, layout = null, titles = null, subName = null, subParams = [];
     for (const raw of source.split(/\r?\n/)) {
       const line = raw.trim();
       if (!line || line.startsWith('#')) {
@@ -658,58 +5205,81 @@
       }
       if (depth === 0) {
         if (line.startsWith('@')) {
+          const subdirective = /^@subcircuit\s+([A-Za-z_]\w*)\s*(?:\(([^)]*)\))?\s*\{$/.exec(line);
+          if (subdirective) {
+            if (Object.prototype.hasOwnProperty.call(subs, subdirective[1])) throw new Error(`Duplicate subcircuit: ${subdirective[1]}`);
+            const params = (subdirective[2] || '').split(/[\s,]+/).filter(Boolean);
+            for (const param of params) {
+              if (!/^[A-Za-z_]\w*$/.test(param)) throw new Error(`Invalid subcircuit parameter: ${param}`);
+              if (params.indexOf(param) !== params.lastIndexOf(param)) throw new Error(`Duplicate subcircuit parameter: ${param}`);
+            }
+            subName = subdirective[1];
+            subParams = params;
+            lines = ['circuit {'];
+            depth = 1;
+            continue;
+          }
           if (/^@title(?:\s|$)/.test(line)) {
-            if (titles !== null) throw new Error('@title は1回だけ指定してください。');
+            if (titles !== null) throw new Error('@title may only be specified once.');
             titles = [];
             let rest = line.slice(6).trim();
             while (rest) {
               const match = /^"((?:[^"\\]|\\["\\])*)"(?:\s+|$)/.exec(rest);
-              if (!match) throw new Error('@title は二重引用符で囲んだ文字列を空白で区切って指定してください。');
+              if (!match) throw new Error('@title values must be double-quoted strings separated by whitespace.');
               titles.push(match[1].replace(/\\(["\\])/g, '$1'));
               rest = rest.slice(match[0].length).trim();
             }
-            if (!titles.length) throw new Error('@title にタイトルを1個以上指定してください。');
+            if (!titles.length) throw new Error('@title requires at least one title.');
             continue;
           }
-          if (layout !== null) throw new Error('@layout は1回だけ指定してください。');
+          if (layout !== null) throw new Error('@layout may only be specified once.');
           const directive = /^@layout(?:\s+(.+))?$/.exec(line);
-          if (!directive) throw new Error(`未対応のディレクティブ: ${line}`);
+          if (!directive) throw new Error(`Unsupported directive: ${line}`);
           const settings = Object.create(null);
           for (const part of (directive[1] || '').split(/\s+/).filter(Boolean)) {
             const match = /^(rows|cols)=(\d+)$/.exec(part);
-            if (!match || Object.prototype.hasOwnProperty.call(settings, match[1])) throw new Error(`不正な @layout パラメータ: ${part}`);
+            if (!match || Object.prototype.hasOwnProperty.call(settings, match[1])) throw new Error(`Invalid @layout parameter: ${part}`);
             const value = Number(match[2]);
-            if (!Number.isSafeInteger(value) || value < 1) throw new Error('@layout の行数・列数は正の整数で指定してください。');
+            if (!Number.isSafeInteger(value) || value < 1) throw new Error('@layout rows and columns must be positive integers.');
             settings[match[1]] = value;
           }
-          if (!('rows' in settings) && !('cols' in settings)) throw new Error('@layout に rows または cols を指定してください。');
+          if (!('rows' in settings) && !('cols' in settings)) throw new Error('@layout requires rows or cols.');
           layout = settings;
           continue;
         }
-        if (!/^circuit\s*\{$/.test(line)) throw new Error(`circuit またはディレクティブを指定してください: ${line}`);
+        if (!/^circuit\s*\{$/.test(line)) throw new Error(`Expected circuit or directive: ${line}`);
         lines = []; depth = 1; lines.push(raw); continue;
       }
       lines.push(raw);
       let quoted = false;
+      let escaped = false;
       for (const char of raw) {
-        if (char === '"') quoted = !quoted;
+        if (escaped) { escaped = false; continue; }
+        if (char === '\\') escaped = true;
+        else if (char === '"') quoted = !quoted;
         else if (!quoted && char === '{') depth++;
         else if (!quoted && char === '}') depth--;
-        if (depth < 0) throw new Error('余分な閉じ括弧があります。');
+        if (depth < 0) throw new Error('Unmatched closing brace.');
       }
-      if (quoted) throw new Error('引用符が閉じられていません。');
-      if (depth === 0) { circuits.push(lines.join('\n')); lines = null; }
+      // An unclosed quote here means a component argument was broken across
+      // lines: the rest of the argument is on the following line.
+      if (quoted) throw new Error('Line break error. A quote is not closed on this line; write each component on one line.');
+      if (depth === 0) {
+        if (subName) { subs[subName] = { source: lines.join('\n'), params: subParams }; subName = null; subParams = []; }
+        else circuits.push(lines.join('\n'));
+        lines = null;
+      }
     }
-    if (depth !== 0) throw new Error('ブロックの閉じ括弧が不足しています。');
-    if (!circuits.length) throw new Error('circuit ブロックを1個以上指定してください。');
-    return { circuits, layout, titles };
+    if (depth !== 0) throw new Error('Missing closing brace for a block.');
+    if (!circuits.length) throw new Error('Specify at least one circuit block.');
+    return { circuits, layout, titles, subs };
   }
 
   function svgSize(svg) {
     const match = /\bviewBox="([^"]+)"/.exec(svg);
-    if (!match) throw new Error('回路 SVG の viewBox を取得できません。');
+    if (!match) throw new Error('Cannot read the viewBox from the circuit SVG.');
     const box = match[1].split(/\s+/).map(Number);
-    if (box.length !== 4 || box.some(n => !Number.isFinite(n)) || box[2] <= 0 || box[3] <= 0) throw new Error('回路 SVG の viewBox が不正です。');
+    if (box.length !== 4 || box.some(n => !Number.isFinite(n)) || box[2] <= 0 || box[3] <= 0) throw new Error('Invalid circuit SVG viewBox.');
     return { width: box[2], height: box[3] };
   }
 
@@ -722,11 +5292,11 @@
     const height = circuitHeight + 30;
     const x = (width - circuitWidth) / 2;
     const inner = svg.replace('<svg ', `<svg x="${x}" y="0" width="${circuitWidth}" height="${circuitHeight}" `);
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="回路図">${inner}<text x="${width / 2}" y="${circuitHeight + 24}" text-anchor="middle" font-family="sans-serif" font-size="14">${escapeText(title)}</text></svg>`;
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Circuit diagram">${inner}<text x="${width / 2}" y="${circuitHeight + 24}" text-anchor="middle" font-family="sans-serif" font-size="14">${escapeText(title)}</text></svg>`;
   }
 
   function render(source, log = () => {}) {
-    const { circuits, layout, titles } = splitDocument(source);
+    const { circuits, layout, titles, subs } = splitDocument(source);
     let rows, cols;
     if (layout === null) {
       rows = circuits.length; cols = 1;
@@ -740,9 +5310,9 @@
     const count = rows >= Math.ceil(circuits.length / cols) ? circuits.length : rows * cols;
     const selected = circuits.slice(0, count);
     // Preserve the pre-layout output exactly for a single untitled circuit.
-    if (selected.length === 1) return addTitle(renderCircuit(selected[0], log), titles && titles[0]);
+    if (selected.length === 1) return addTitle(renderCircuit(selected[0], log, subs), titles && titles[0]);
     const children = selected.map((block, i) => {
-      const svg = addTitle(renderCircuit(block, log), titles && titles[i]);
+      const svg = addTitle(renderCircuit(block, log, subs), titles && titles[i]);
       return { svg, ...svgSize(svg) };
     });
     const usedCols = Math.min(cols, children.length);
@@ -763,7 +5333,7 @@
       const x = horizontal.positions[i % usedCols], y = vertical.positions[Math.floor(i / usedCols)];
       return child.svg.replace('<svg ', `<svg x="${x}" y="${y}" width="${child.width}" height="${child.height}" `);
     }).join('');
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${horizontal.total} ${vertical.total}" role="img" aria-label="回路図">${content}</svg>`;
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${horizontal.total} ${vertical.total}" role="img" aria-label="Circuit diagram">${content}</svg>`;
   }
 
   root.Fleming = Object.freeze({ render, referenceImages });

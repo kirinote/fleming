@@ -721,6 +721,9 @@
   function sideExtent(type) {
     if (['Line', 'Wire', 'Gap', 'BusLine', 'DataBusLine'].includes(type)) return [0, 0];
     if (type === 'Inductor') return [4.5, 0];
+    // Variable resistors carry an arrow whose bbox Schemdraw expands by
+    // arrowwidth (0.16). Extents are in px above/below the centreline.
+    if (['ResistorVar', 'ResistorVarIEEE', 'ResistorVarIEC'].includes(type)) return [26.76, 23.76];
     if (['Source', 'SourceV', 'SourceSin', 'SourceI', 'SourcePulse', 'SourceSquare', 'SourceTriangle',
       'SourceRamp', 'Lamp', 'Lamp2', 'Solar', 'Neon', 'MeterV', 'MeterA', 'MeterI', 'MeterOhm',
       'MeterArrow', 'SourceControlled', 'SourceControlledV', 'SourceControlledI', 'Motor'].includes(type)) return [18, 18];
@@ -742,11 +745,12 @@
     points.end = [length, 0];
     points.center = [length / 2, 0];
     const tapH = extra.tapH === undefined ? 0.72 * 36 : extra.tapH;
+    const zoom = extra.zoom === undefined ? 1 : extra.zoom;
     const batterySpan = extra.batterySpan || 0;
     const coaxRadius = extra.coaxRadius === undefined ? 10.8 : extra.coaxRadius;
     const coaxLead = extra.coaxLead === undefined ? 21.6 : extra.coaxLead;
     if (['Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE'].includes(type)) {
-      points.tap = [mx(bodyCenter), -tapH * sy];
+      points.tap = [mx(bodyCenter), -tapH * zoom * sy];
     }
     if (type === 'Rshunt') {
       points.v1 = [mx(bodyCenter - 31.5), 18 * sy];
@@ -818,6 +822,11 @@
       points.t3 = [ax(right - px + 4.32), dpdt ? (pole2 - 14.4) * sy : pole2 * sy];
       if (dpdt) points.t4 = [ax(right - px + 4.32), (pole2 + 14.4) * sy];
     }
+    if (type === 'MeterArrow') {
+      // Source anchors istart/iend are the ends of the 1-unit body.
+      points.istart = [bodyCenter - 18, 0];
+      points.iend = [bodyCenter + 18, 0];
+    }
     if (type === 'Inductor2') {
       const a = bodyCenter - 18, b = bodyCenter + 18;
       points.NW = [mx(a), -22.32 * sy];
@@ -829,25 +838,33 @@
       points.xy = [a, 0];
     }
     if (type === 'Coax') {
+      // Schemdraw lists the shield anchors in y-up coordinates: `shieldstart`
+      // is below the axis and `shieldstart_top` above it.
       const r = coaxRadius, l = coaxLead;
-      points.shieldstart = [mx(l), -r * sy];
-      points.shieldstart_top = [mx(l), r * sy];
-      points.shieldend = [mx(length - l), -r * sy];
-      points.shieldend_top = [mx(length - l), r * sy];
-      points.shieldcenter = [mx(length / 2), -r * sy];
-      points.shieldcenter_top = [mx(length / 2), r * sy];
+      points.shieldstart = [mx(l), r * sy];
+      points.shieldstart_top = [mx(l), -r * sy];
+      points.shieldend = [mx(length - l), r * sy];
+      points.shieldend_top = [mx(length - l), -r * sy];
+      points.shieldcenter = [mx(length / 2), r * sy];
+      points.shieldcenter_top = [mx(length / 2), -r * sy];
     }
     if (type === 'Triax') {
-      points.guardstart = [mx(21.6), -10.8 * sy];
-      points.guardstart_top = [mx(21.6), 10.8 * sy];
-      points.guardend = [mx(86.4), -10.8 * sy];
-      points.guardend_top = [mx(86.4), 10.8 * sy];
-      points.shieldstart = [mx(32.4), -21.6 * sy];
-      points.shieldstart_top = [mx(32.4), 21.6 * sy];
-      points.shieldend = [mx(75.6), -21.6 * sy];
-      points.shieldend_top = [mx(75.6), 21.6 * sy];
-      points.shieldcenter = [mx(54), -21.6 * sy];
-      points.shieldcenter_top = [mx(54), 21.6 * sy];
+      const L = length, l = extra.triaxLead === undefined ? 21.6 : extra.triaxLead;
+      const r1 = extra.triaxR1 === undefined ? 10.8 : extra.triaxR1;
+      const r2 = extra.triaxR2 === undefined ? 21.6 : extra.triaxR2;
+      const os = extra.triaxOfsStart === undefined ? 10.8 : extra.triaxOfsStart;
+      const oe = extra.triaxOfsEnd === undefined ? 10.8 : extra.triaxOfsEnd;
+      // Schemdraw's Triax lists `guardstart`/`shieldstart` below the axis.
+      points.guardstart = [mx(l), r1 * sy];
+      points.guardstart_top = [mx(l), -r1 * sy];
+      points.guardend = [mx(L - l), r1 * sy];
+      points.guardend_top = [mx(L - l), -r1 * sy];
+      points.shieldstart = [mx(l + os), r2 * sy];
+      points.shieldstart_top = [mx(l + os), -r2 * sy];
+      points.shieldend = [mx(L - l - oe), r2 * sy];
+      points.shieldend_top = [mx(L - l - oe), -r2 * sy];
+      points.shieldcenter = [mx(L / 2), r2 * sy];
+      points.shieldcenter_top = [mx(L / 2), -r2 * sy];
     }
     return points;
   }
@@ -1154,7 +1171,20 @@
     },
     Dot: { anchors: { start: [0, 0], center: [0, 0], end: [0, 0], xy: [0, 0] }, radius: 2.7 },
     Opamp: lead => ({
-      anchors: { in1: [0, -22.5], in2: [0, 22.5], out: [45 * Math.sqrt(3) + 2 * lead, 0] },
+      // Schemdraw Opamp anchors (opamp.py): oa_back=2.5, oa_xlen=oa_back*√3/2,
+      // leadlen=oa_back/4. `lead` is the local x offset of the triangle.
+      anchors: {
+        in1: [0, -22.5],
+        in2: [0, 22.5],
+        out: [45 * Math.sqrt(3) + 2 * lead, 0],
+        center: [lead + 45 * Math.sqrt(3) / 2, 0],
+        vd: [lead + 45 * Math.sqrt(3) / 3, -0.84 * 36],
+        vs: [lead + 45 * Math.sqrt(3) / 3, 0.84 * 36],
+        n1: [lead + 45 * Math.sqrt(3) * 2 / 3, 0.42 * 36],
+        n2: [lead + 45 * Math.sqrt(3) * 2 / 3, -0.42 * 36],
+        n1a: [lead + 45 * Math.sqrt(3) * 0.9, 0.13 * 36],
+        n2a: [lead + 45 * Math.sqrt(3) * 0.9, -0.13 * 36]
+      },
       defaultDrop: 'out'
     })
   };
@@ -1550,8 +1580,10 @@
       if (seen.has(key)) throw new Error(`Duplicate label argument: ${key}`);
       seen.add(key);
       if (key === 'loc') {
-        if (!['top', 'bot', 'left', 'right', 'start', 'end', 'base', 'collector', 'emitter', 'center', 'C2', 'gate', 'source', 'drain', 'bulk', 'name', 'in1', 'in2', 'out', 'c', 'cbar', 'display'].includes(arg[2]) && !/^in\d+$/.test(arg[2])) throw new Error(`Invalid label location: ${arg[2]}`);
-        label.loc = arg[2];
+        // Schemdraw's _position_label accepts these aliases.
+        const locAlias = { bot: 'bot', B: 'bot', lft: 'left', L: 'left', rgt: 'right', R: 'right', T: 'top' }[arg[2]] || arg[2];
+        if (!['top', 'bot', 'left', 'right', 'start', 'end', 'istart', 'iend', 'base', 'collector', 'emitter', 'center', 'C2', 'gate', 'source', 'drain', 'bulk', 'name', 'in1', 'in2', 'out', 'c', 'cbar', 'display', 'vd', 'vs', 'n1', 'n2', 'n1a', 'n2a'].includes(locAlias) && !/^in\d+$/.test(locAlias) && !/^(?:N|S|E|W|NE|NW|SE|SW)$/.test(locAlias)) throw new Error(`Invalid label location: ${arg[2]}`);
+        label.loc = locAlias;
       } else if (key === 'halign') {
         if (!['left', 'center', 'right'].includes(arg[2])) throw new Error(`Invalid label alignment: ${arg[2]}`);
         label.halign = arg[2];
@@ -1807,7 +1839,7 @@
         continue;
       }
       const previousState = [x, y, direction];
-      if (!record.sub && !['Resistor', 'ResistorIEEE', 'ResistorIEC', 'ResistorVar', 'ResistorVarIEC', 'ResistorVarIEEE', 'Capacitor', 'Capacitor2', 'Inductor', 'Inductor2', 'CPE', 'Nullator', 'Norator', 'Diode', 'DiodeTunnel', 'DiodeTVS', 'DiodeShockley', 'Josephson', 'Zener', 'LED', 'Diac', 'Schottky', 'Varactor', 'Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE', 'Rshunt', 'SCR', 'Triac', 'Fuse', 'FuseIEC', 'FuseIEEE', 'RBox', 'Thermistor', 'Crystal', 'CapacitorVar', 'CapacitorTrim', 'Photoresistor', 'PhotoresistorBox', 'PhotoresistorIEC', 'PhotoresistorIEEE', 'Coax', 'Triax', 'Motor', 'BusLine', 'DataBusLine', 'BusConnect', 'CoaxConnect', 'Plug', 'Jack', 'Terminal', 'Jumper', 'DE9', 'DB25', 'DA15', 'DC37', 'DD50', 'Switch', 'Button', 'SwitchSpdt', 'SwitchSpdt2', 'SwitchDpst', 'SwitchDpdt', 'SwitchRotary', 'SwitchDIP', 'SwitchReed', 'Battery', 'BatteryCell', 'BatteryDouble', 'Line', 'Wire', 'Dot', 'Source', 'SourceSin', 'SourceV', 'SourceI', 'SourcePulse', 'SourceSquare', 'SourceTriangle', 'SourceRamp', 'Lamp', 'Lamp2', 'Solar', 'Neon', 'Photodiode', 'LED2', 'FuseUS', 'Memristor', 'Memristor2', 'SparkGap', 'MeterV', 'MeterA', 'MeterI', 'MeterOhm', 'MeterArrow', 'SourceControlled', 'SourceControlledV', 'SourceControlledI', 'Gap', 'Breaker', 'Optocoupler', 'Relay', 'Opamp', 'Ground', 'GroundSignal', 'GroundChassis', 'Vdd', 'Vss', 'NoConnect', 'Antenna', 'AntennaLoop', 'AntennaLoop2', 'Speaker', 'Mic', 'AudioJack', "OutletA","OutletB","OutletC","OutletD","OutletE","OutletF","OutletG","OutletH","OutletI","OutletJ","OutletK","OutletL", 'Arrowhead', 'DotDotDot', 'Label', 'Tag', 'Bjt', 'JFet', 'Hemt', 'NpnSchottky', 'PnpSchottky', 'BjtNpn', 'BjtPnp', 'BjtPnp2c', 'BjtNpn2', 'BjtPnp2', 'BjtPnp2c2', 'IgbtN', 'IgbtP', 'NpnPhoto', 'PnpPhoto', 'AnalogNFet', 'AnalogPFet', 'AnalogBiasedFet', 'NMos2', 'PMos2', 'NFet2', 'PFet2', 'JFetN2', 'JFetP2', 'JFetN', 'JFetP', 'NFet', 'PFet', 'NMos', 'PMos', 'CurrentMirror', 'VoltageMirror', 'Ic', 'Multiplexer', 'VoltageRegulator', 'DFlipFlop', 'JKFlipFlop', 'Ic555', 'SevenSegment', 'MeterBox', 'MeterAnalog', 'MeterDigital', 'Oscilloscope', 'IcDIP', 'Header', 'Transformer', 'LoopCurrent', 'CurrentLabel', 'Rectifier', ...logicGateTypes].includes(type)) throw new Error(`Unsupported component: ${type}`);
+      if (!record.sub && !['Resistor', 'ResistorIEEE', 'ResistorIEC', 'ResistorVar', 'ResistorVarIEC', 'ResistorVarIEEE', 'Capacitor', 'Capacitor2', 'Inductor', 'Inductor2', 'CPE', 'Nullator', 'Norator', 'Diode', 'DiodeTunnel', 'DiodeTVS', 'DiodeShockley', 'Josephson', 'Zener', 'LED', 'Diac', 'Schottky', 'Varactor', 'Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE', 'Rshunt', 'SCR', 'Triac', 'Fuse', 'FuseIEC', 'FuseIEEE', 'RBox', 'Thermistor', 'Crystal', 'CapacitorVar', 'CapacitorTrim', 'Photoresistor', 'PhotoresistorBox', 'PhotoresistorIEC', 'PhotoresistorIEEE', 'Coax', 'Triax', 'Motor', 'BusLine', 'DataBusLine', 'BusConnect', 'CoaxConnect', 'Plug', 'Jack', 'Terminal', 'Jumper', 'DE9', 'DB25', 'DA15', 'DC37', 'DD50', 'Switch', 'Button', 'SwitchSpdt', 'SwitchSpdt2', 'SwitchDpst', 'SwitchDpdt', 'SwitchRotary', 'SwitchDIP', 'SwitchReed', 'Battery', 'BatteryCell', 'BatteryDouble', 'Line', 'Wire', 'Dot', 'Source', 'SourceSin', 'SourceV', 'SourceI', 'SourcePulse', 'SourceSquare', 'SourceTriangle', 'SourceRamp', 'Lamp', 'Lamp2', 'Solar', 'Neon', 'Photodiode', 'LED2', 'FuseUS', 'Memristor', 'Memristor2', 'SparkGap', 'MeterV', 'MeterA', 'MeterI', 'MeterOhm', 'MeterArrow', 'SourceControlled', 'SourceControlledV', 'SourceControlledI', 'Gap', 'Breaker', 'Optocoupler', 'Relay', 'Opamp', 'Ground', 'GroundSignal', 'GroundChassis', 'Vdd', 'Vss', 'NoConnect', 'Antenna', 'AntennaLoop', 'AntennaLoop2', 'Speaker', 'Mic', 'AudioJack', "OutletA","OutletB","OutletC","OutletD","OutletE","OutletF","OutletG","OutletH","OutletI","OutletJ","OutletK","OutletL", 'Arrowhead', 'DotDotDot', 'Label', 'Tag', 'Bjt', 'JFet', 'Hemt', 'NpnSchottky', 'PnpSchottky', 'BjtNpn', 'BjtPnp', 'BjtPnp2c', 'BjtNpn2', 'BjtPnp2', 'BjtPnp2c2', 'IgbtN', 'IgbtP', 'NpnPhoto', 'PnpPhoto', 'AnalogNFet', 'AnalogPFet', 'AnalogBiasedFet', 'NMos2', 'PMos2', 'NFet2', 'PFet2', 'JFetN2', 'JFetP2', 'JFetN', 'JFetP', 'NFet', 'PFet', 'NMos', 'PMos', 'CurrentMirror', 'VoltageMirror', 'Ic', 'Multiplexer', 'VoltageRegulator', 'DFlipFlop', 'JKFlipFlop', 'Ic555', 'SevenSegment', 'MeterBox', 'MeterAnalog', 'MeterDigital', 'Oscilloscope', 'IcDIP', 'Header', 'Transformer', 'LoopCurrent', 'CurrentLabel', 'CurrentLabelInline', 'Rectifier', 'Triode', 'DualVacuumTube', 'Nullor', 'VoltageTransactor', 'TransimpedanceTransactor', 'CurrentTransactor', 'TransadmittanceTransactor', ...logicGateTypes].includes(type)) throw new Error(`Unsupported component: ${type}`);
       const isMeter = ['MeterBox', 'MeterAnalog', 'MeterDigital', 'Oscilloscope'].includes(type);
       const isSource = ['Source', 'SourceV', 'SourceSin', 'SourceI', 'SourcePulse', 'SourceSquare', 'SourceTriangle', 'SourceRamp', 'Lamp', 'Lamp2', 'Solar', 'Neon', 'MeterV', 'MeterA', 'MeterI', 'MeterOhm', 'MeterArrow', 'SourceControlled', 'SourceControlledV', 'SourceControlledI', 'Solar', 'Neon'].includes(type);
       if (name && Object.prototype.hasOwnProperty.call(names, name)) throw new Error(`Duplicate component name: ${name}`);
@@ -1823,7 +1855,7 @@
           if (!options.pin) options.pin = [];
           options.pin.push(value);
         } else {
-          if (!record.sub && !['at', 'to', 'tox', 'toy', 'endpoints', 'anchor', 'theta', 'color', 'drop', 'shift', 'scale', 'tap_length', 'idot', 'dot', 'leads', 'lead', 'hold', 'flip', 'reverse', 'length', 'shape', 'k', 'arrow', 'size', 'pin', 'preclr', 'preclrinvert', 'slant', 'pinspacing', 'demux', 'decimal', 'digit', 'segcolor', 'tilt', 'labelsegments', 'anode', 'cathode', 'needle_percent', 'window_fill', 'input_fill', 'signal', 'signal_color', 'signal_lw', 'grid', ...(['IcDIP', 'Header', 'Transformer'].includes(type) ? ['pins', 'notch', 'width', 'pinw', 'spacing', 'number', 'pfontsize', 'rows', 'cols', 'style', 'numbering', 'shownumber', 'pinspacing', 'edge', 'pinfill', 't1', 't2', 'core', 'loop', 'align', 'pinsleft', 'pinsright', 'pinalignleft', 'pinalignright', 'pinfontsizeleft', 'pinfontsizeright'] : []), ...(['NFet2', 'PFet2', 'NFet', 'PFet'].includes(type) ? ['bulk'] : []), ...(['JFetN2', 'JFetP2'].includes(type) ? ['circle'] : []), ...(['AnalogNFet', 'AnalogPFet', 'AnalogBiasedFet'].includes(type) ? ['bulk', 'offset_gate', 'source_arrow'] : []), ...(type === 'Breaker' ? ['dots'] : []), ...(type === 'Optocoupler' ? ['box', 'boxfill', 'boxpad', 'base'] : []), ...(type === 'Relay' ? ['switch', 'core', 'link', 'box', 'boxfill', 'boxpad', 'swreverse', 'swflip', 'unit', 'cycl'] : []), ...(type === 'Inductor2' ? ['loops', 'core'] : []), ...(type === 'Capacitor2' ? ['polar'] : []), ...(type === 'Josephson' ? ['box'] : []), ...(type === 'Coax' ? ['radius', 'leadlen'] : []), ...(type === 'BusLine' ? ['lw'] : []), ...(type === 'BusConnect' ? ['n', 'slant_up', 'dy', 'lwbus', 'l'] : []), ...(type === 'CoaxConnect' ? ['radius', 'radiusinner', 'fillinner'] : []), ...(type === 'Terminal' ? ['r', 'open'] : []), ...(type === 'Jumper' ? ['pinspacing'] : []), ...(['DE9', 'DB25', 'DA15', 'DC37', 'DD50'].includes(type) ? ['pinspacing', 'edge', 'number', 'pinfill'] : []), ...(['MeterBox', 'MeterAnalog', 'MeterDigital', 'Oscilloscope'].includes(type) ? ['width', 'corner', 'inputs', 'input_ofst', 'input_lw', 'input_rad'] : []), ...(type === 'MeterAnalog' ? ['needle_color', 'needle_width'] : []), ...(['MeterDigital', 'Oscilloscope'].includes(type) ? ['screen_fill', 'screen_lw'] : []), ...(type === 'Oscilloscope' ? ['grid_color', 'grid_lw'] : []), ...(logicMultiInputTypes.has(type) ? ['inputs', 'inputnots', 'leadin', 'leadout'] : []), ...(type === 'Tristate' ? ['outputnot', 'controlnot'] : []), ...(type === 'Capacitor' ? ['polar'] : []), ...(type === 'Inductor' ? ['core'] : []), ...(['Diode', 'LED'].includes(type) ? ['fill'] : []), ...(type === 'Dot' ? ['open'] : []), ...(type === 'Opamp' ? ['sign'] : []), ...(type === 'Button' ? ['nc', 'contacts'] : []), ...(['NMos', 'PMos', 'NMos2', 'PMos2'].includes(type) ? ['diode'] : []), ...(['NFet', 'PFet'].includes(type) ? ['bulk'] : []), ...(['Switch', 'SwitchSpdt', 'SwitchSpdt2'].includes(type) ? ['contacts', 'nc', 'action'] : []), ...(type === 'SwitchRotary' ? ['n', 'dtheta', 'theta0', 'radius', 'arrowlen', 'arrowcontact'] : []), ...(type === 'SwitchDIP' ? ['n', 'pattern', 'switchcolor', 'swidth', 'spacing'] : []), ...(['SwitchDpst', 'SwitchDpdt'].includes(type) ? ['contacts', 'link'] : []), ...(['Bjt', 'JFet', 'NpnSchottky', 'PnpSchottky', 'BjtNpn', 'BjtPnp', 'BjtPnp2c', 'JFetN', 'JFetP', 'NMos', 'PMos', 'NMos2', 'PMos2'].includes(type) ? ['circle'] : []), ...(type === 'Hemt' ? ['split', 'source_arrow'] : []), ...(type === 'AudioJack' ? ['ring', 'switch', 'ringswitch', 'dots', 'open', 'radius'] : []), ...(/^Outlet[A-L]$/.test(type) ? ['plug'] : []), ...(type === 'Arrowhead' ? ['headwidth', 'headlength'] : []), ...(type === 'DotDotDot' ? ['radius', 'open'] : []), ...(type === 'Tag' ? ['width', 'height'] : []), ...(type === 'Arrow' ? ['double'] : []), ...(type === 'LoopCurrent' ? ['elms', 'pad', 'direction', 'theta1', 'theta2'] : []), ...(type === 'CurrentLabel' ? ['top', 'ofst', 'headlength', 'headwidth'] : [])].includes(key)) throw new Error(`Unsupported argument: ${key}`);
+          if (!record.sub && !['at', 'to', 'tox', 'toy', 'endpoints', 'anchor', 'theta', 'color', 'drop', 'shift', 'scale', 'tap_length', 'idot', 'dot', 'leads', 'lead', 'hold', 'flip', 'reverse', 'length', 'shape', 'k', 'arrow', 'delta', 'dx', 'dy', 'size', 'pin', 'preclr', 'preclrinvert', 'slant', 'pinspacing', 'demux', 'decimal', 'digit', 'segcolor', 'tilt', 'labelsegments', 'anode', 'cathode', 'needle_percent', 'window_fill', 'input_fill', 'signal', 'signal_color', 'signal_lw', 'grid', ...(['IcDIP', 'Header', 'Transformer'].includes(type) ? ['pins', 'notch', 'width', 'pinw', 'spacing', 'number', 'pfontsize', 'rows', 'cols', 'style', 'numbering', 'shownumber', 'pinspacing', 'edge', 'pinfill', 't1', 't2', 'core', 'loop', 'align', 'pinsleft', 'pinsright', 'pinalignleft', 'pinalignright', 'pinfontsizeleft', 'pinfontsizeright'] : []), ...(['NFet2', 'PFet2', 'NFet', 'PFet'].includes(type) ? ['bulk'] : []), ...(['JFetN2', 'JFetP2'].includes(type) ? ['circle'] : []), ...(['AnalogNFet', 'AnalogPFet', 'AnalogBiasedFet'].includes(type) ? ['bulk', 'offset_gate', 'source_arrow'] : []), ...(type === 'Breaker' ? ['dots'] : []), ...(type === 'Optocoupler' ? ['box', 'boxfill', 'boxpad', 'base'] : []), ...(type === 'Relay' ? ['switch', 'core', 'link', 'box', 'boxfill', 'boxpad', 'swreverse', 'swflip', 'unit', 'cycl'] : []), ...(type === 'Inductor2' ? ['loops', 'core'] : []), ...(type === 'Capacitor2' ? ['polar'] : []), ...(type === 'Josephson' ? ['box'] : []), ...(type === 'Coax' ? ['radius', 'leadlen'] : []), ...(type === 'Triax' ? ['radiusinner', 'radiusouter', 'leadlen', 'shieldofststart', 'shieldofstend'] : []), ...(type === 'BusLine' ? ['lw'] : []), ...(type === 'BusConnect' ? ['n', 'slant_up', 'dy', 'lwbus', 'l'] : []), ...(type === 'CoaxConnect' ? ['radius', 'radiusinner', 'fillinner'] : []), ...(type === 'Terminal' ? ['r', 'open'] : []), ...(type === 'Jumper' ? ['pinspacing'] : []), ...(['DE9', 'DB25', 'DA15', 'DC37', 'DD50'].includes(type) ? ['pinspacing', 'edge', 'number', 'pinfill'] : []), ...(['MeterBox', 'MeterAnalog', 'MeterDigital', 'Oscilloscope'].includes(type) ? ['width', 'corner', 'inputs', 'input_ofst', 'input_lw', 'input_rad'] : []), ...(type === 'MeterAnalog' ? ['needle_color', 'needle_width'] : []), ...(['MeterDigital', 'Oscilloscope'].includes(type) ? ['screen_fill', 'screen_lw'] : []), ...(type === 'Oscilloscope' ? ['grid_color', 'grid_lw'] : []), ...(logicMultiInputTypes.has(type) ? ['inputs', 'inputnots', 'leadin', 'leadout'] : []), ...(type === 'Tristate' ? ['outputnot', 'controlnot'] : []), ...(type === 'Capacitor' ? ['polar'] : []), ...(type === 'Inductor' ? ['core'] : []), ...(['Diode', 'LED'].includes(type) ? ['fill'] : []), ...(type === 'Dot' ? ['open'] : []), ...(type === 'Opamp' ? ['sign'] : []), ...(type === 'Button' ? ['nc', 'contacts'] : []), ...(['NMos', 'PMos', 'NMos2', 'PMos2'].includes(type) ? ['diode'] : []), ...(['NFet', 'PFet'].includes(type) ? ['bulk'] : []), ...(['Switch', 'SwitchSpdt', 'SwitchSpdt2'].includes(type) ? ['contacts', 'nc', 'action'] : []), ...(type === 'SwitchRotary' ? ['n', 'dtheta', 'theta0', 'radius', 'arrowlen', 'arrowcontact'] : []), ...(type === 'SwitchDIP' ? ['n', 'pattern', 'switchcolor', 'swidth', 'spacing'] : []), ...(['SwitchDpst', 'SwitchDpdt'].includes(type) ? ['contacts', 'link'] : []), ...(['Bjt', 'JFet', 'NpnSchottky', 'PnpSchottky', 'BjtNpn', 'BjtPnp', 'BjtPnp2c', 'JFetN', 'JFetP', 'NMos', 'PMos', 'NMos2', 'PMos2'].includes(type) ? ['circle'] : []), ...(type === 'Hemt' ? ['split', 'source_arrow'] : []), ...(type === 'AudioJack' ? ['ring', 'switch', 'ringswitch', 'dots', 'open', 'radius'] : []), ...(/^Outlet[A-L]$/.test(type) ? ['plug'] : []), ...(type === 'Arrowhead' ? ['headwidth', 'headlength'] : []), ...(type === 'DotDotDot' ? ['radius', 'open'] : []), ...(type === 'Tag' ? ['width', 'height'] : []), ...(type === 'Arrow' ? ['double'] : []), ...(type === 'LoopCurrent' ? ['elms', 'pad', 'direction', 'theta1', 'theta2'] : []), ...(type === 'CurrentLabel' ? ['top', 'ofst', 'headlength', 'headwidth'] : []), ...(type === 'CurrentLabelInline' ? ['direction', 'start', 'ofst', 'headlength', 'headwidth'] : []), ...(['Nullor', 'VoltageTransactor', 'TransimpedanceTransactor', 'CurrentTransactor', 'TransadmittanceTransactor'].includes(type) ? ['reverse_output'] : []), ...(type === 'Triode' ? ['heater', 'split'] : []), ...(type === 'DualVacuumTube' ? ['grids_left', 'grids_right', 'heater', 'cathode', 'anodetype'] : [])].includes(key)) throw new Error(`Unsupported argument: ${key}`);
           if (Object.prototype.hasOwnProperty.call(options, key)) throw new Error(`Duplicate argument: ${key}`);
           options[key] = value === undefined ? true : value;
         }
@@ -1902,9 +1934,9 @@
         log(`Subcircuit ${type}: ${'at' in options ? 'at=' + options.at : 'sequential'}`);
         continue;
       }
-      if (!isMeter && (labels.some(label => label.fontsize !== undefined || label.color !== undefined || (!logicGateTypes.has(type) && ['name', 'in1', 'in2', 'display'].includes(label.loc))) || ['needle_percent', 'window_fill', 'input_fill', 'signal', 'signal_color', 'signal_lw', 'grid'].some(key => key in options))) throw new Error(`The specified arguments are not supported for ${type}.`);
+      if (!isMeter && (labels.some(label => (type !== 'Opamp' && (label.fontsize !== undefined || label.color !== undefined)) || (!logicGateTypes.has(type) && type !== 'Opamp' && ['name', 'in1', 'in2', 'display'].includes(label.loc))) || ['needle_percent', 'window_fill', 'input_fill', 'signal', 'signal_color', 'signal_lw', 'grid'].some(key => key in options))) throw new Error(`The specified arguments are not supported for ${type}.`);
       if (type !== 'Wire' && (['shape', 'k'].some(key => key in options) || (type !== 'Line' && 'arrow' in options))) throw new Error(`Wire arguments cannot be used with ${type}.`);
-      if (type === 'Line' && 'arrow' in options && !['->', '<-', '<->', '|->', '|-o'].includes(options.arrow)) throw new Error('Invalid Line arrow.');
+      if (type === 'Line' && 'arrow' in options && !['->', '<-', '<->', '|->', '|-o', 'o-', '-o', 'o-o'].includes(options.arrow)) throw new Error('Invalid Line arrow.');
       if (type === 'Rectifier') {
         // Schemdraw's Rectifier: four diodes forming a bridge, with N/S/E/W
         // anchors. It is a compound element, so it does not move the cursor.
@@ -1951,6 +1983,357 @@
           namedBoxes[name] = { ...elemBox };
         }
         log(`Rectifier: at (${x / 36}, ${-y / 36})`);
+        continue;
+      }
+      if (type === 'DualVacuumTube') {
+        // Schemdraw's DualVacuumTube (elements/tubes.py): two elements in one
+        // envelope, width = 1.5·tube_w, each element offset by ±0.2·width.
+        const allowed = ['at', 'anchor', 'theta', 'color', 'grids_left', 'grids_right', 'heater', 'cathode', 'anodetype'];
+        if (selectedDirection || length !== null || Object.keys(options).some(key => !allowed.includes(key))) throw new Error('DualVacuumTube supports at, anchor, theta, color, grids_left, grids_right, heater, cathode, and anodetype.');
+        const intOpt = (key, fallback) => {
+          if (!(key in options)) return fallback;
+          if (typeof options[key] !== 'string' || !/^\d+$/.test(options[key]) || Number(options[key]) > 100) throw new Error(`${key} must be a non-negative integer.`);
+          return Number(options[key]);
+        };
+        const gridsLeft = intOpt('grids_left', 1), gridsRight = intOpt('grids_right', 1);
+        let heater = true;
+        if ('heater' in options) {
+          if (!['True', 'False'].includes(options.heater)) throw new Error('heater must be True or False.');
+          heater = options.heater === 'True';
+        }
+        if ('cathode' in options && options.cathode !== 'heated') throw new Error('DualVacuumTube only supports cathode="heated".');
+        if ('anodetype' in options && options.anodetype !== 'plate') throw new Error('DualVacuumTube only supports anodetype="plate".');
+        let theta = 0;
+        if ('theta' in options) {
+          if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta must be a finite number.');
+          theta = Number(options.theta);
+        }
+        const TUBE_W = 1.75 * 36, WIDTH = TUBE_W * 1.5, H = TUBE_W;
+        const GRID_W = TUBE_W * 0.4, GRID_GAP = TUBE_W / 9, DOT_R = 0.075 * 36;
+        const halfW = WIDTH / 2, elemLeft = -WIDTH * 0.2, elemRight = WIDTH * 0.2;
+        const sq2 = (TUBE_W / 2) / Math.SQRT2;
+        const localAnchors = {
+          N: [0, 0], S: [0, H], E: [halfW, H / 2], W: [-halfW, H / 2],
+          NE: [sq2, TUBE_W / 2 - sq2], NW: [-sq2, TUBE_W / 2 - sq2],
+          SE: [sq2, TUBE_W / 2 + sq2], SW: [-sq2, TUBE_W / 2 + sq2]
+        };
+        let body = `<rect x="${-halfW}" y="0" width="${WIDTH}" height="${H}" rx="${Math.min(halfW, H / 2)}" fill="none" stroke="${color}" stroke-width="2.5"/>`;
+        const segLine = (x1, y1, x2, y2, lw = 2) => { body += `<path d="M ${x1},${y1} L ${x2},${y2}" fill="none" stroke="${color}" stroke-width="${lw}" stroke-linecap="round"/>`; };
+        const drawElement = (xc, grids, suffix) => {
+          // Schemdraw works in y-up coordinates with the anode at y=0; here y
+          // grows downward, so grid_top/grid_bottom/cathode are mirrored.
+          const gridTop = H / 2 - (Math.max(0, grids - 1) * GRID_GAP) / 2;
+          const gridBot = gridTop + GRID_GAP * Math.max(0, grids - 1);
+          const gridLeft = xc - GRID_W / 2, gridRight = xc + GRID_W / 2;
+          const anodeY = gridTop - GRID_GAP;
+          segLine(gridLeft, anodeY, gridRight, anodeY);
+          segLine(xc, 0, xc, anodeY);
+          localAnchors[`anode${suffix}`] = [xc, 0];
+          const nDashes = 3, xGap = GRID_W / (nDashes + 2), dashW = (GRID_W - xGap * (nDashes - 1)) / nDashes;
+          for (let j = 0; j < grids; j++) {
+            const gy = gridTop + GRID_GAP * j;
+            for (let i = 0; i < nDashes; i++) {
+              const gx = gridLeft + i * (dashW + xGap);
+              segLine(gx, gy, gx + dashW, gy);
+            }
+            if (grids === 1) {
+              localAnchors[`grid${suffix}`] = [gridLeft - xGap, gy];
+              localAnchors[`grid${suffix}_R`] = [gridRight + xGap, gy];
+            } else {
+              localAnchors[`grid${suffix}_${j + 1}`] = [gridLeft - xGap, gy];
+              localAnchors[`grid${suffix}_${j + 1}R`] = [gridRight + xGap, gy];
+            }
+          }
+          const catY = gridBot + GRID_GAP, catDrop = DOT_R * 2;
+          body += `<path d="M ${gridLeft},${catY + catDrop} L ${gridLeft},${catY} L ${gridRight},${catY} L ${gridRight},${catY + catDrop}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`;
+          localAnchors[`cathode${suffix}`] = [gridLeft, catY + catDrop];
+          localAnchors[`cathode${suffix}_R`] = [gridRight, catY + catDrop];
+          return catY;
+        };
+        const catA = drawElement(elemLeft, gridsLeft, 'A');
+        const catB = drawElement(elemRight, gridsRight, 'B');
+        if (heater) {
+          const catY = Math.max(catA, catB);
+          const heatTop = catY + GRID_GAP * 1.25;
+          const heatLeft = -GRID_W / 3.5, heatRight = GRID_W / 3.5;
+          const heatBot = H + GRID_GAP, heatBend = heatTop + Math.SQRT2 * heatRight;
+          body += `<path d="M ${heatLeft},${heatBot} L ${heatLeft},${heatBend} L 0,${heatTop} L ${heatRight},${heatBend} L ${heatRight},${heatBot}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`;
+          localAnchors.heat1 = [heatLeft, heatBot];
+          localAnchors.heat2 = [heatRight, heatBot];
+        }
+        if ('anchor' in options && !Object.prototype.hasOwnProperty.call(localAnchors, options.anchor)) throw new Error(`Unknown anchor: ${options.anchor}`);
+        const origin = 'at' in options ? atPoint(options.at) : [x, y];
+        const offset = 'anchor' in options ? localAnchors[options.anchor] : [0, 0];
+        const rad = -theta * Math.PI / 180, cos = Math.cos(rad), sin = Math.sin(rad);
+        const tf = ([px, py]) => [origin[0] + (px - offset[0]) * cos - (py - offset[1]) * sin, origin[1] + (px - offset[0]) * sin + (py - offset[1]) * cos];
+        const transform = `translate(${origin[0]} ${origin[1]})`
+          + (theta ? ` rotate(${-theta})` : '')
+          + (offset[0] || offset[1] ? ` translate(${-offset[0]} ${-offset[1]})` : '');
+        elements.push(`<g transform="${transform}">${body}</g>`);
+        labels.forEach((label, i) => {
+          if (label.rotate !== undefined) throw new Error('DualVacuumTube does not support label rotation.');
+          const size = label.fontsize === undefined ? labelSize : label.fontsize;
+          if (label.loc) {
+            if (!Object.prototype.hasOwnProperty.call(localAnchors, label.loc)) throw new Error(`Unknown DualVacuumTube label anchor: ${label.loc}`);
+            const [px, py] = localAnchors[label.loc];
+            const hints = { NE: [.12, .12, 'left'], NW: [-.12, .12, 'right'], SE: [.12, -.12, 'left'], SW: [-.12, -.12, 'right'] }[label.loc];
+            const ox = hints ? hints[0] : (Array.isArray(label.ofst) ? label.ofst[0] : 0);
+            const oy = hints ? hints[1] : (Array.isArray(label.ofst) ? label.ofst[1] : (label.ofst == null ? 0.1 : label.ofst));
+            const halign = hints ? hints[2] : 'center', valign = 'center';
+            const [lx, ly] = tf([px + ox * 36, py - oy * 36]);
+            const anchor = { left: 'start', center: 'middle', right: 'end' }[label.halign || halign];
+            elements.push(`<text x="${lx}" y="${ly - size}" dominant-baseline="central" text-anchor="${anchor}"${textFill} font-family="sans-serif" font-size="${size}"><tspan x="${lx}" dy="${size}">${labelContent(label.text)}</tspan></text>`);
+            return;
+          }
+          const [lx, ly] = tf([0, -0.1 * 36 - i * (size + 2)]);
+          elements.push(`<text x="${lx}" y="${ly - size}" dominant-baseline="ideographic" text-anchor="middle"${textFill} font-family="sans-serif" font-size="${size}"><tspan x="${lx}" dy="${size}">${labelContent(label.text)}</tspan></text>`);
+        });
+        const anchors = Object.create(null);
+        for (const [key, point] of Object.entries(localAnchors)) anchors[key] = tf(point);
+        for (const corner of [[-halfW, 0], [halfW, 0], [halfW, H], [-halfW, H]]) {
+          const [bx, by] = tf(corner);
+          bounds(bx, by, bx, by);
+        }
+        if (name) {
+          names[name] = anchors;
+          namedTypes[name] = type;
+          namedDirs[name] = [1, 0];
+          namedBoxes[name] = { ...elemBox };
+        }
+        log(`DualVacuumTube: at (${origin[0] / 36}, ${-origin[1] / 36})`);
+        continue;
+      }
+      if (type === 'Triode') {
+        // Schemdraw's Triode (elements/tubes.py). Coordinates follow
+        // VacuumTube._draw_envelope/_draw_elements: tube_w=1.75, grid_w=0.7,
+        // grid_ygap=tube_w/9, n_grid_dashes=3, dot_radius=0.075, heated
+        // cathode, plate anode, no heater.
+        const allowed = ['at', 'anchor', 'theta', 'color', 'heater', 'split'];
+        if (selectedDirection || length !== null || Object.keys(options).some(key => !allowed.includes(key))) throw new Error('Triode supports at, anchor, theta, color, heater, and split.');
+        if ('heater' in options) {
+          if (!['True', 'False'].includes(options.heater)) throw new Error('heater must be True or False.');
+          if (options.heater === 'True') throw new Error('Triode heater=True is not supported.');
+        }
+        if ('split' in options && options.split !== 'none') throw new Error('Triode split other than none is not supported.');
+        let theta = 0;
+        if ('theta' in options) {
+          if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta must be a finite number.');
+          theta = Number(options.theta);
+        }
+        const TUBE_W = 1.75 * 36;
+        const TUBE_R = TUBE_W / 2;
+        const GRID_W = TUBE_W * 0.4;
+        const GRID_GAP = TUBE_W / 9;
+        const DOT_R = 0.075 * 36;
+        const H = TUBE_W;
+        // SVG y grows downward: the anode N is at y=0 and the envelope bottom at y=H.
+        const gridY = H / 2;
+        const anodeY = gridY - GRID_GAP;
+        const catY = gridY + GRID_GAP;
+        const gridLeft = -GRID_W / 2, gridRight = GRID_W / 2;
+        const gridXGap = GRID_W / (3 + 2);
+        const gridDashW = (GRID_W - gridXGap * 2) / 3;
+        const gridXs = [0, 1, 2].map(i => gridLeft + i * (gridDashW + gridXGap));
+        const sq2 = TUBE_R / Math.SQRT2;
+        const localAnchors = {
+          N: [0, 0], S: [0, H], E: [TUBE_R, H / 2], W: [-TUBE_R, H / 2],
+          NE: [sq2, TUBE_R - sq2], NW: [-sq2, TUBE_R - sq2],
+          SE: [sq2, TUBE_R + sq2], SW: [-sq2, TUBE_R + sq2],
+          anode: [0, 0],
+          grid: [gridLeft - gridXGap, gridY], grid_R: [gridRight + gridXGap, gridY],
+          control: [gridLeft - gridXGap, gridY], control_R: [gridRight + gridXGap, gridY],
+          cathode: [gridLeft, catY + DOT_R * 2], cathode_R: [gridRight, catY + DOT_R * 2]
+        };
+        if ('anchor' in options && !Object.prototype.hasOwnProperty.call(localAnchors, options.anchor)) throw new Error(`Unknown anchor: ${options.anchor}`);
+        const origin = 'at' in options ? atPoint(options.at) : [x, y];
+        const offset = 'anchor' in options ? localAnchors[options.anchor] : [0, 0];
+        const rad = -theta * Math.PI / 180, cos = Math.cos(rad), sin = Math.sin(rad);
+        const tf = ([px, py]) => [origin[0] + (px - offset[0]) * cos - (py - offset[1]) * sin, origin[1] + (px - offset[0]) * sin + (py - offset[1]) * cos];
+        let body = `<circle cx="0" cy="${H / 2}" r="${TUBE_R}" fill="none" stroke="${color}" stroke-width="2.5"/>`;
+        const seg = (x1, y1, x2, y2, lw = 2) => { body += `<path d="M ${x1},${y1} L ${x2},${y2}" fill="none" stroke="${color}" stroke-width="${lw}" stroke-linecap="round"/>`; };
+        // Anode plate and its lead from N.
+        seg(gridLeft, anodeY, gridRight, anodeY);
+        seg(0, 0, 0, anodeY);
+        // Control grid: three dashes.
+        for (const gx of gridXs) seg(gx, gridY, gx + gridDashW, gridY);
+        // Heated cathode.
+        body += `<path d="M ${gridLeft},${catY + DOT_R * 2} L ${gridLeft},${catY} L ${gridRight},${catY} L ${gridRight},${catY + DOT_R * 2}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`;
+        const transform = `translate(${origin[0]} ${origin[1]})`
+          + (theta ? ` rotate(${-theta})` : '')
+          + (offset[0] || offset[1] ? ` translate(${-offset[0]} ${-offset[1]})` : '');
+        elements.push(`<g transform="${transform}">${body}</g>`);
+        labels.forEach((label, i) => {
+          if (label.rotate !== undefined) throw new Error('Triode does not support label rotation.');
+          const size = label.fontsize === undefined ? labelSize : label.fontsize;
+          if (label.loc) {
+            if (!Object.prototype.hasOwnProperty.call(localAnchors, label.loc)) throw new Error(`Unknown Triode label anchor: ${label.loc}`);
+            const [px, py] = localAnchors[label.loc];
+            const hints = { NE: [.12, .12, 'left'], NW: [-.12, .12, 'right'], SE: [.12, -.12, 'left'], SW: [-.12, -.12, 'right'] }[label.loc];
+            const ox = hints ? hints[0] : (Array.isArray(label.ofst) ? label.ofst[0] : 0);
+            const oy = hints ? hints[1] : (Array.isArray(label.ofst) ? label.ofst[1] : (label.ofst == null ? 0.1 : label.ofst));
+            const halign = hints ? hints[2] : 'center';
+            const [lx, ly] = tf([px + ox * 36, py - oy * 36]);
+            const anchor = { left: 'start', center: 'middle', right: 'end' }[label.halign || halign];
+            elements.push(`<text x="${lx}" y="${ly - size}" dominant-baseline="central" text-anchor="${anchor}"${textFill} font-family="sans-serif" font-size="${size}"><tspan x="${lx}" dy="${size}">${labelContent(label.text)}</tspan></text>`);
+            return;
+          }
+          const anchorY = -0.1 * 36;
+          const [lx, ly] = tf([0, anchorY - i * (size + 2)]);
+          elements.push(`<text x="${lx}" y="${ly - size}" dominant-baseline="ideographic" text-anchor="middle"${textFill} font-family="sans-serif" font-size="${size}"><tspan x="${lx}" dy="${size}">${labelContent(label.text)}</tspan></text>`);
+        });
+        const anchors = Object.create(null);
+        for (const [key, point] of Object.entries(localAnchors)) anchors[key] = tf(point);
+        for (const corner of [[-TUBE_R, 0], [TUBE_R, 0], [TUBE_R, H], [-TUBE_R, H]]) {
+          const [bx, by] = tf(corner);
+          bounds(bx, by, bx, by);
+        }
+        if (name) {
+          names[name] = anchors;
+          namedTypes[name] = type;
+          namedDirs[name] = [1, 0];
+          namedBoxes[name] = { ...elemBox };
+        }
+        log(`Triode: at (${origin[0] / 36}, ${-origin[1] / 36})`);
+        continue;
+      }
+      if (['Nullor', 'VoltageTransactor', 'TransimpedanceTransactor', 'CurrentTransactor', 'TransadmittanceTransactor'].includes(type)) {
+        // Schemdraw's two-port transactor family (elements.twoports): a
+        // 2.15 x 1.9 unit box with in_p/in_n/out_p/out_n anchors, a vertical
+        // input branch, and a controlled source on the output side.
+        const allowed = ['at', 'anchor', 'theta', 'color', 'reverse', 'flip', 'reverse_output'];
+        if (selectedDirection || length !== null || Object.keys(options).some(key => !allowed.includes(key))) throw new Error(`${type} supports at, anchor, theta, color, reverse, flip, and reverse_output.`);
+        if (labels.some(label => label.items || label.halign != null || label.ofst != null || label.rotate !== undefined || label.loc != null)) throw new Error(`${type} does not support label arguments.`);
+        let reverseOutput = false;
+        if ('reverse_output' in options) {
+          if (type === 'Nullor') throw new Error('reverse_output is not supported for Nullor.');
+          if (!['True', 'False'].includes(options.reverse_output)) throw new Error('reverse_output must be True or False.');
+          reverseOutput = options.reverse_output === 'True';
+        }
+        let theta = 0;
+        if ('theta' in options) {
+          if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta must be a finite number.');
+          theta = Number(options.theta);
+        }
+        // Schemdraw ElementTwoport defaults: width=2.15, unit=1.5,
+        // boxpadx=0.2, boxpady=0.2, minw=0.5, tp_termlen=0.5.
+        const BOX_W = 2.15 * 36;
+        const BOX_PAD = 0.2 * 36;
+        const MINW = 0.5 * 36;
+        const CHILD_LEN = 1.5 * 36;
+        const HW = BOX_W / 2;
+        const HH = (CHILD_LEN + 2 * BOX_PAD) / 2;
+        const TERM_LEN = 0.5 * 36;
+        const TERMX = HW + TERM_LEN;
+        const TERMY = CHILD_LEN / 2;
+        // ElementTwoport places each child at boxpadx + max(child height/2, minw/2).
+        // Line and Gap report zero height before placement, Nullator/Norator 0.5;
+        // the controlled source glyph is 1 unit tall.
+        const childPad = type === 'Nullor' ? 0.3 * 36 : BOX_PAD;
+        const outputHalf = (type === 'Nullor' ? 0.5 : 1) * 36 / 2;
+        const inX = -HW + childPad + MINW / 2;
+        const outX = HW - childPad - outputHalf;
+        const localAnchors = { in_p: [-TERMX, -TERMY], in_n: [-TERMX, TERMY], out_p: [TERMX, -TERMY], out_n: [TERMX, TERMY], center: [0, 0] };
+        if ('anchor' in options && !Object.prototype.hasOwnProperty.call(localAnchors, options.anchor)) throw new Error(`Unknown anchor: ${options.anchor}`);
+        const reverse = 'reverse' in options, flip = 'flip' in options;
+        const reflect = ([px, py]) => [reverse ? -px : px, flip ? -py : py];
+        // Without an anchor Schemdraw puts the box's left edge at the cursor.
+        const offset = 'anchor' in options ? reflect(localAnchors[options.anchor]) : [-1.075 * 36, 0];
+        const origin = 'at' in options ? atPoint(options.at) : [x, y];
+        const rad = -theta * Math.PI / 180, cos = Math.cos(rad), sin = Math.sin(rad);
+        const tf = ([px, py]) => {
+          let [qx, qy] = reflect([px, py]);
+          qx -= offset[0]; qy -= offset[1];
+          return [origin[0] + qx * cos - qy * sin, origin[1] + qx * sin + qy * cos];
+        };
+        let body = '';
+        const path = d => { body += `<path d="${d}" ${stroke}/>`; };
+        const seg = (x1, y1, x2, y2) => path(`M ${x1},${y1} L ${x2},${y2}`);
+        path(`M ${-HW},${-HH} L ${HW},${-HH} L ${HW},${HH} L ${-HW},${HH} Z`);
+        for (const side of [-1, 1]) {
+          seg(-TERMX, side * TERMY, -HW, side * TERMY);
+          seg(inX, side * TERMY, -HW, side * TERMY);
+          seg(outX, side * TERMY, HW, side * TERMY);
+          seg(HW, side * TERMY, TERMX, side * TERMY);
+        }
+        if (type === 'Nullor') {
+          // Nullator ellipse on the input side, norator (two circles) on the output side.
+          body += `<ellipse cx="${inX}" cy="0" rx="9" ry="18" fill="none" stroke="${color}" stroke-width="2"/>`;
+          body += `<circle cx="${outX}" cy="-9" r="9" fill="none" stroke="${color}" stroke-width="2"/>`;
+          body += `<circle cx="${outX}" cy="9" r="9" fill="none" stroke="${color}" stroke-width="2"/>`;
+          seg(inX, -TERMY, inX, -18);
+          seg(inX, 18, inX, TERMY);
+          seg(outX, -TERMY, outX, -18);
+          seg(outX, 18, outX, TERMY);
+        } else {
+          const inputLine = type === 'TransimpedanceTransactor' || type === 'CurrentTransactor';
+          if (inputLine) {
+            seg(inX, -TERMY, inX, TERMY);
+            // ElementTwoport adds CurrentLabelInline(ofst=-0.15, headlength=0.3)
+            // to the input branch. Its arrowhead is 0.3 wide, the base sits at
+            // the segment start and the tip 2 px short of the segment end.
+            const inlineHead = 0.3 * 36, inlineOfst = 0.15 * 36;
+            body += `<path d="M ${inX},${inlineOfst - 2} L ${inX - inlineHead / 2},${-inlineOfst} L ${inX + inlineHead / 2},${-inlineOfst} Z" fill="${color}" stroke="${color}"/>`;
+          }
+          seg(outX, -TERMY, outX, -18);
+          seg(outX, 18, outX, TERMY);
+          path(`M ${outX},-18 L ${outX + 18},0 L ${outX},18 L ${outX - 18},0 Z`);
+          if (type === 'VoltageTransactor' || type === 'TransimpedanceTransactor') {
+            // SourceControlledV: ±0.2 marks at 0.25 and 0.75 along the 1-unit body.
+            const markArm = 0.2 * 36 / 2, markY = 0.25 * 36;
+            const plusY = reverseOutput ? markY : -markY, minusY = -plusY;
+            path(`M ${outX - markArm},${plusY} L ${outX + markArm},${plusY} M ${outX},${plusY - markArm} L ${outX},${plusY + markArm}`);
+            seg(outX - markArm, minusY, outX + markArm, minusY);
+          } else {
+            // SourceControlledI: arrow .25→.75 with arrowlength .25, width .15.
+            const arrowTip = 0.25 * 36 - 2, arrowHalf = 0.15 * 36 / 2, arrowTail = -0.25 * 36;
+            const tipY = reverseOutput ? arrowTip : -arrowTip;
+            body += `<path d="M ${outX},${tipY} L ${outX - arrowHalf},0 L ${outX + arrowHalf},0 Z" fill="${color}" stroke="${color}"/>`;
+            seg(outX, 0, outX, reverseOutput ? arrowTail : -arrowTail);
+          }
+        }
+        const transform = `translate(${origin[0]} ${origin[1]})`
+          + (theta ? ` rotate(${-theta})` : '')
+          + ` translate(${-offset[0]} ${-offset[1]}) scale(${reverse ? -1 : 1} ${flip ? -1 : 1})`;
+        elements.push(`<g transform="${transform}">${body}</g>`);
+        // Voltage transactors mark the input port. Schemdraw places these as
+        // SegmentText at `input_component.start/end ± 0.05` with
+        // align=('right','bottom'/'top'); reverse/flip mirror the alignment.
+        if (type === 'VoltageTransactor' || type === 'TransadmittanceTransactor') {
+          // 0.75 is the input branch half-height; SegmentText offsets by 0.05.
+          const signY = (0.75 - 0.05) * 36;
+          const signAnchor = reverse ? 'start' : 'end';
+          for (const [mark, dy, baseline] of [
+            ['+', -signY, flip ? 'ideographic' : 'hanging'],
+            ['−', signY, flip ? 'hanging' : 'ideographic']
+          ]) {
+            const [tx, ty] = tf([inX, dy]);
+            elements.push(`<text x="${tx}" y="${ty - labelSize}" dominant-baseline="${baseline}" text-anchor="${signAnchor}"${textFill} font-family="sans-serif" font-size="${labelSize}"><tspan x="${tx}" dy="${labelSize}">${mark}</tspan></text>`);
+          }
+        }
+        // Element labels sit above the box, centred, regardless of flip.
+        // Schemdraw's label anchor is bbox.ymax + lblofst (0.1 unit); text_tosvg
+        // writes y = anchor - fontsize with an ideographic baseline and a
+        // tspan dy=fontsize.
+        labels.forEach((label, i) => {
+          const size = label.fontsize === undefined ? labelSize : label.fontsize;
+          const lx = origin[0];
+          const anchorY = origin[1] - HH - 0.1 * 36 - i * (size + 2);
+          elements.push(`<text x="${lx}" y="${anchorY - size}" dominant-baseline="ideographic" text-anchor="middle"${textFill} font-family="sans-serif" font-size="${size}"><tspan x="${lx}" dy="${size}">${labelContent(label.text)}</tspan></text>`);
+        });
+        const anchors = Object.create(null);
+        for (const [key, point] of Object.entries(localAnchors)) anchors[key] = tf(point);
+        for (const corner of [[-HW, -HH], [HW, -HH], [HW, HH], [-HW, HH]]) {
+          const [bx, by] = tf(corner);
+          bounds(bx, by, bx, by);
+        }
+        if (labels.length) bounds(origin[0] - 60, origin[1] - HH - 0.1 * 36 - labelSize * (labels.length + 1) - labels.length * 2, origin[0] + 60, origin[1] - HH);
+        if (name) {
+          names[name] = anchors;
+          namedTypes[name] = type;
+          namedDirs[name] = [1, 0];
+          namedBoxes[name] = { x1: origin[0] - HW, y1: origin[1] - HH, x2: origin[0] + HW, y2: origin[1] + HH };
+        }
+        log(`${type}: at (${origin[0] / 36}, ${-origin[1] / 36})`);
         continue;
       }
       if (type === 'CurrentLabel') {
@@ -2049,6 +2432,61 @@
           bounds(lx - width, ly - size, lx + width, ly + size);
         }
         log(`CurrentLabel: at=${ref}`);
+        continue;
+      }
+      if (type === 'CurrentLabelInline') {
+        // Schemdraw's CurrentLabelInline: a short inline arrow placed on an
+        // existing element, used for currents entering or leaving a port.
+        const allowed = ['at', 'color', 'direction', 'ofst', 'start', 'headlength', 'headwidth'];
+        if (selectedDirection || length !== null || Object.keys(options).some(key => !allowed.includes(key))) throw new Error('CurrentLabelInline supports at, direction, ofst, start, headlength, headwidth, color, and labels.');
+        if (!('at' in options)) throw new Error('CurrentLabelInline requires at=<element>.');
+        const ref = String(options.at);
+        let cx0, cy0, dir = [1, 0];
+        if (Object.prototype.hasOwnProperty.call(names, ref)) {
+          [cx0, cy0] = names[ref].center;
+          dir = namedDirs[ref] || [1, 0];
+        } else if (/^\(/.test(ref)) [cx0, cy0] = atPoint(ref);
+        else throw new Error(`CurrentLabelInline at must name an element: ${ref}`);
+        const signed = (key, fallback) => {
+          if (!(key in options)) return fallback;
+          if (typeof options[key] !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options[key])) throw new Error(`CurrentLabelInline ${key} must be a number.`);
+          return Number(options[key]);
+        };
+        const direction = options.direction === undefined ? 'in' : String(options.direction);
+        if (!['in', 'out'].includes(direction)) throw new Error('CurrentLabelInline direction must be in or out.');
+        let start = true;
+        if ('start' in options) {
+          if (!['True', 'False'].includes(options.start)) throw new Error('CurrentLabelInline start must be True or False.');
+          start = options.start === 'True';
+        }
+        const headLen = signed('headlength', 0.3) * 36;
+        const headW = signed('headwidth', 0.3) * 36;
+        if (!(headLen > 0) || !(headW > 0)) throw new Error('CurrentLabelInline headlength and headwidth must be positive numbers.');
+        let x0 = signed('ofst', 0.8) * 36, dx = headLen;
+        if (direction === 'in') { x0 += headLen; dx = -dx; }
+        if (start) { x0 = -x0; dx = -dx; }
+        const ux = dir[0], uy = dir[1], sgn = Math.sign(dx) || 1;
+        const sx = cx0 + ux * x0, sy = cy0 + uy * x0;
+        const ex = cx0 + ux * (x0 + dx), ey = cy0 + uy * (x0 + dx);
+        // The arrow base is one headlength before the end; the tip stops 2 px short.
+        const hx = ex - ux * headLen * sgn, hy = ey - uy * headLen * sgn;
+        const len = Math.abs(dx);
+        if (len > headLen) elements.push(`<path d="M ${sx.toFixed(3)},${sy.toFixed(3)} L ${hx.toFixed(3)},${hy.toFixed(3)}" ${stroke}/>`);
+        const tipX = ex - ux * 2 * sgn, tipY = ey - uy * 2 * sgn;
+        elements.push(`<path d="M ${tipX.toFixed(3)},${tipY.toFixed(3)} L ${(hx - uy * headW / 2).toFixed(3)},${(hy + ux * headW / 2).toFixed(3)} L ${(hx + uy * headW / 2).toFixed(3)},${(hy - ux * headW / 2).toFixed(3)} Z" fill="${color}" stroke="${color}"/>`);
+        bounds(Math.min(sx, ex) - 6, Math.min(sy, ey) - 6, Math.max(sx, ex) + 6, Math.max(sy, ey) + 6);
+        for (const label of labels) {
+          if (label.items || label.halign != null || label.ofst != null || label.rotate !== undefined || label.loc != null) throw new Error('CurrentLabelInline does not support label arguments.');
+          const size = label.fontsize === undefined ? labelSize : label.fontsize;
+          // Schemdraw's lblofst is 0 for this element: the label anchor is the
+          // arrow bbox top (headwidth above the centreline).
+          const lx = cx0, anchorY = cy0 - headW;
+          const ly = anchorY - size;
+          elements.push(`<text x="${lx.toFixed(3)}" y="${ly.toFixed(3)}" dominant-baseline="ideographic" text-anchor="middle"${textFill} font-family="sans-serif" font-size="${size}"><tspan x="${lx.toFixed(3)}" dy="${size}">${labelContent(label.text)}</tspan></text>`);
+          const width = Math.max(size, Array.from(label.text).length * size * 0.71);
+          bounds(lx - width, ly - size, lx + width, ly + size);
+        }
+        log(`CurrentLabelInline: at=${ref}`);
         continue;
       }
       if (type === 'LoopCurrent') {
@@ -3006,7 +3444,7 @@
       }
       if (type === 'Wire') {
         if (labels.some(label => label.rotate !== undefined || (label.ofst != null && !Array.isArray(label.ofst)))) throw new Error('Wire labels do not support rotate or numeric ofst.');
-        if (selectedDirection || length !== null || Object.keys(options).some(key => !['at', 'to', 'shape', 'k', 'arrow', 'color'].includes(key))) throw new Error('Wire supports shape, k, arrow, at, to, color, and label.');
+        if (selectedDirection || length !== null || Object.keys(options).some(key => !['at', 'to', 'shape', 'k', 'arrow', 'color', 'hold', 'delta', 'dx', 'dy', 'dot', 'idot'].includes(key))) throw new Error('Wire supports shape, k, arrow, at, to, delta, dx, dy, dot, idot, hold, color, and label.');
         const wireShape = options.shape === undefined ? '-' : options.shape;
         if (!['-', '-|', '|-', 'z', 'N', 'n', 'c'].includes(wireShape)) throw new Error(`Unsupported Wire shape: ${wireShape}`);
         if ('arrow' in options && options.arrow !== '->') throw new Error('Wire arrow only supports ->.');
@@ -3015,8 +3453,23 @@
           if (typeof options.k !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.k) || !Number.isFinite(Number(options.k) * 36)) throw new Error('Wire k must be a finite number.');
           k = Number(options.k) * 36;
         }
+        const offset = (key) => {
+          if (!(key in options)) return 0;
+          if (typeof options[key] !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options[key]) || !Number.isFinite(Number(options[key]) * 36)) throw new Error(`Wire ${key} must be a finite number.`);
+          return Number(options[key]) * 36;
+        };
         if ('at' in options) [x, y] = atPoint(options.at);
-        const start = [x, y], end = 'to' in options ? point(options.to) : [108, 72];
+        const start = [x, y];
+        let end;
+        if ('delta' in options) {
+          const m = /^\(\s*(\S+)\s+(\S+)\s*\)$/.exec(String(options.delta));
+          if (!m) throw new Error('Wire delta must be specified as delta="(dx dy)".');
+          const dx = readMove(m[1], unit), dy = readMove(m[2], unit);
+          end = [x + dx, y - dy];
+        } else if ('to' in options) {
+          const target = point(options.to);
+          end = [target[0] + offset('dx'), target[1] - offset('dy')];
+        } else end = [108, 72];
         const dx = end[0] - x, dy = end[1] - y;
         let vertices, mid;
         if (wireShape === '-') { vertices = [start, end]; mid = [x + dx / 2, y + dy / 2]; }
@@ -3041,6 +3494,12 @@
           for (const [vx, vy] of corners) bounds(vx - 1, vy - 1, vx + 1, vy + 1);
         }
         const anchors = { start, end, mid, xy: start };
+        // Schemdraw's Wire.dot()/idot() place a filled dot at the end/start.
+        for (const [key, px, py] of [['idot', start[0], start[1]], ['dot', end[0], end[1]]]) {
+          if (!(key in options)) continue;
+          if (options[key] === 'open') whiteMarker(px, py, 2.7, color);
+          else elements.push(`<circle cx="${px}" cy="${py}" r="2.7" fill="${color}" stroke="${color}" stroke-width="2"/>`);
+        }
         const xs = vertices.map(p => p[0]), ys = vertices.map(p => p[1]);
         const left = Math.min(...xs), right = Math.max(...xs), top = Math.min(...ys), bottom = Math.max(...ys);
         for (const label of labels) {
@@ -3080,6 +3539,7 @@
           namedBoxes[name] = { ...elemBox };
         }
         [x, y] = end;
+        if ('hold' in options) [x, y, direction] = previousState;
         log(`Wire: shape=${wireShape}`);
         continue;
       }
@@ -3197,7 +3657,7 @@
         || ['BjtNpn2', 'BjtPnp2', 'BjtPnp2c2', 'NMos2', 'PMos2', 'NFet2', 'PFet2', 'JFetN2', 'JFetP2',
           'Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE', 'Rshunt', 'SCR', 'Triac',
           'Battery', 'BatteryCell', 'BatteryDouble', 'SourceI', 'Zener', 'LED', 'Diac'].includes(type);
-      if (labels.some(label => !label.items && (
+      if (labels.some(label => !label.items && type !== 'Opamp' && (
         ['start', 'end'].includes(label.loc)
         || (['base', 'collector', 'emitter'].includes(label.loc) && !(componentDefinitions[type] && componentDefinitions[type].transistor))
         || (type === 'Dot' && label.ofst != null && !Array.isArray(label.ofst))
@@ -3211,7 +3671,7 @@
       if ('drop' in options && (!(transistor || logicGateTypes.has(type)) || typeof options.drop !== 'string')) throw new Error('drop must specify a terminal name.');
       if (('leads' in options && type !== 'Opamp') || ('lead' in options && type !== 'Ground')) throw new Error(`That constructor argument cannot be used with ${type}.`);
       const transistors = ['Bjt', 'JFet', 'Hemt', 'NpnSchottky', 'PnpSchottky', 'BjtNpn', 'BjtPnp', 'BjtPnp2c', 'BjtNpn2', 'BjtPnp2', 'BjtPnp2c2', 'IgbtN', 'IgbtP', 'NpnPhoto', 'PnpPhoto', 'AnalogNFet', 'AnalogPFet', 'AnalogBiasedFet', 'NMos2', 'PMos2', 'NFet2', 'PFet2', 'JFetN2', 'JFetP2', 'JFetN', 'JFetP', 'NFet', 'PFet', 'NMos', 'PMos'];
-      if ('reverse' in options && !['SourceV', 'SourceI', 'Zener', 'Potentiometer', 'Rshunt', 'SCR', 'Triac', 'Ground', 'GroundSignal', 'GroundChassis', 'Vdd', 'Vss', 'NoConnect', 'CurrentMirror', 'VoltageMirror', 'Breaker', 'Inductor2', 'CPE', 'Nullator', 'Norator', 'Memristor2', 'ResistorVar', 'Capacitor2', 'ResistorVarIEC', 'ResistorVarIEEE', 'PotentiometerIEC', 'PotentiometerIEEE', 'FuseIEC', 'FuseIEEE', 'DiodeTunnel', 'DiodeTVS', 'DiodeShockley', 'Josephson', 'Photoresistor', 'PhotoresistorBox', 'PhotoresistorIEC', 'PhotoresistorIEEE', 'Coax', 'Triax', 'Motor', 'BusLine', 'DataBusLine', ...transistors, ...Object.keys(twoTerminalParts), ...logicGateTypes, 'SwitchRotary', 'SwitchDIP', 'Antenna', 'AntennaLoop', 'AntennaLoop2', 'Speaker', 'Mic', 'AudioJack', "OutletA","OutletB","OutletC","OutletD","OutletE","OutletF","OutletG","OutletH","OutletI","OutletJ","OutletK","OutletL", 'Tag', 'Label', 'Arrowhead', 'DotDotDot'].includes(type)) throw new Error(`${type} does not support reverse.`);
+      if ('reverse' in options && !['SourceV', 'SourceI', 'Zener', 'Potentiometer', 'Rshunt', 'SCR', 'Triac', 'Ground', 'GroundSignal', 'GroundChassis', 'Vdd', 'Vss', 'NoConnect', 'CurrentMirror', 'VoltageMirror', 'Breaker', 'Inductor2', 'CPE', 'Nullator', 'Norator', 'Memristor2', 'ResistorVar', 'Capacitor2', 'ResistorVarIEC', 'ResistorVarIEEE', 'PotentiometerIEC', 'PotentiometerIEEE', 'FuseIEC', 'FuseIEEE', 'DiodeTunnel', 'DiodeTVS', 'DiodeShockley', 'Josephson', 'Photoresistor', 'PhotoresistorBox', 'PhotoresistorIEC', 'PhotoresistorIEEE', 'Coax', 'Triax', 'Motor', 'BusLine', 'DataBusLine', 'Battery', 'BatteryCell', 'BatteryDouble', ...transistors, ...Object.keys(twoTerminalParts), ...logicGateTypes, 'SwitchRotary', 'SwitchDIP', 'Antenna', 'AntennaLoop', 'AntennaLoop2', 'Speaker', 'Mic', 'AudioJack', "OutletA","OutletB","OutletC","OutletD","OutletE","OutletF","OutletG","OutletH","OutletI","OutletJ","OutletK","OutletL", 'Tag', 'Label', 'Arrowhead', 'DotDotDot'].includes(type)) throw new Error(`${type} does not support reverse.`);
       if ('flip' in options && !['Zener', 'LED', 'Diac', 'Fuse', 'Battery', 'BatteryCell', 'BatteryDouble', 'SourceI', 'Potentiometer', 'Rshunt', 'SCR', 'Triac', 'Ground', 'GroundSignal', 'GroundChassis', 'Vdd', 'Vss', 'NoConnect', 'CurrentMirror', 'VoltageMirror', 'Breaker', 'Inductor2', 'CPE', 'Nullator', 'Norator', 'Memristor2', 'ResistorVar', 'Capacitor2', 'ResistorVarIEC', 'ResistorVarIEEE', 'PotentiometerIEC', 'PotentiometerIEEE', 'FuseIEC', 'FuseIEEE', 'DiodeTunnel', 'DiodeTVS', 'DiodeShockley', 'Josephson', 'Photoresistor', 'PhotoresistorBox', 'PhotoresistorIEC', 'PhotoresistorIEEE', 'Coax', 'Triax', 'Motor', 'BusLine', 'DataBusLine', ...transistors, ...Object.keys(twoTerminalParts), ...logicGateTypes, 'SwitchRotary', 'SwitchDIP', 'Antenna', 'AntennaLoop', 'AntennaLoop2', 'Speaker', 'Mic', 'AudioJack', "OutletA","OutletB","OutletC","OutletD","OutletE","OutletF","OutletG","OutletH","OutletI","OutletJ","OutletK","OutletL", 'Tag', 'Label', 'Arrowhead', 'DotDotDot'].includes(type)) throw new Error(`${type} does not support flip.`);
       let zoom = 1;
       if ('scale' in options) {
@@ -3282,6 +3742,21 @@
         coaxRadius = positive('radius', 10.8);
         coaxLead = positive('leadlen', 21.6);
       }
+      // Triax dimensions (Schemdraw defaults: leadlen .6, r1 .3, r2 .6,
+      // shield offsets .3).
+      let triaxLead = 21.6, triaxR1 = 10.8, triaxR2 = 21.6, triaxOfsStart = 10.8, triaxOfsEnd = 10.8;
+      if (type === 'Triax') {
+        const positive = (key, fallback) => {
+          if (!(key in options)) return fallback;
+          if (typeof options[key] !== 'string' || !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(options[key]) || !(Number(options[key]) >= 0)) throw new Error(`${key} must be a non-negative number.`);
+          return Number(options[key]) * 36;
+        };
+        triaxLead = positive('leadlen', 21.6);
+        triaxR1 = positive('radiusinner', 10.8);
+        triaxR2 = positive('radiusouter', 21.6);
+        triaxOfsStart = positive('shieldofststart', 10.8);
+        triaxOfsEnd = positive('shieldofstend', 10.8);
+      }
       let busLw = 4;
       if (type === 'BusLine' && 'lw' in options) {
         if (typeof options.lw !== 'string' || !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.lw) || !(Number(options.lw) > 0)) throw new Error('lw must be a positive number.');
@@ -3298,7 +3773,7 @@
       if ('theta' in options) {
         if (type === 'Opamp' || type === 'Dot') throw new Error(`${type} does not support theta.`);
         if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta must be a finite number.');
-        if (selectedDirection || 'endpoints' in options || 'to' in options || 'tox' in options || 'toy' in options) throw new Error('theta cannot be combined with a direction, endpoints, to, tox, or toy.');
+        if (selectedDirection || 'endpoints' in options || 'to' in options || ('tox' in options && !(type in twoTerminalParts)) || ('toy' in options && !(type in twoTerminalParts) && type !== 'Line')) throw new Error('theta cannot be combined with a direction, endpoints, to, tox, or toy.');
       }
       if ('length' in options) {
         if (length !== null) throw new Error('Only one length may be specified.');
@@ -3531,20 +4006,60 @@
         continue;
       }
       if (type === 'Opamp') {
-        if (('leads' in options && !['True', 'False'].includes(options.leads)) || selectedDirection || labels.length || length !== null || 'to' in options || 'tox' in options || 'toy' in options || 'dot' in options || 'idot' in options) throw new Error('Opamp supports leads=True/False, anchor, at, and hold.');
+        const opampHints = {
+          in1: [-.1, .1, 'right', 'bottom', 9], in2: [-.1, .1, 'right', 'bottom', 9],
+          out: [0, .1, 'left', 'bottom', 9], vd: [-.1, .25, 'right', 'bottom', 9],
+          vs: [-.1, -.25, 'right', 'top', 9], n1: [-.1, -.25, 'right', 'top', 9],
+          n1a: [-.1, -.3, 'right', 'top', 9], n2: [-.1, .25, 'right', 'bottom', 9],
+          n2a: [-.1, .3, 'right', 'bottom', 9]
+        };
+        if (('leads' in options && !['True', 'False'].includes(options.leads)) || selectedDirection || length !== null || 'to' in options || 'tox' in options || 'toy' in options || 'dot' in options || 'idot' in options) throw new Error('Opamp supports leads=True/False, anchor, at, hold, and labels.');
+        if (labels.some(label => label.items || label.rotate !== undefined || (label.loc != null && label.loc !== 'center' && !Object.prototype.hasOwnProperty.call(opampHints, label.loc)))) throw new Error('Opamp labels support loc center, in1, in2, out, vd, vs, n1, n2, n1a, n2a.');
         const width = 45 * Math.sqrt(3), lead = options.leads === 'True' ? 22.5 : 0;
         const definition = componentDefinitions.Opamp(lead);
         if ('anchor' in options) {
           if (!Object.prototype.hasOwnProperty.call(definition.anchors, options.anchor)) throw new Error(`Unsupported Opamp anchor: ${options.anchor}`);
         }
-        const placed = placeComponent(definition, [x, y], { anchor: options.anchor === undefined ? null : options.anchor });
+        const placed = placeComponent(definition, [x, y], { anchor: options.anchor === undefined ? null : options.anchor, scale: [zoom, zoom] });
         [x, y] = placed.transform(0, 0);
         const bodyX = x + lead;
         const anchors = placed.anchors;
-        const leads = lead ? ` M -22.5,-22.5 L 0,-22.5 M -22.5,22.5 L 0,22.5 M ${width},0 L ${width + lead},0` : '';
-        const sign = options.sign === 'False' ? '' : ' M 6.143,-22.5 L 13.343,-22.5 M 6.143,22.5 L 13.343,22.5 M 9.743,18.9 L 9.743,26.1';
-        elements.push(`<g transform="translate(${bodyX} ${y})"><path d="M 0,-45 L ${width},0 L 0,45 Z${leads}${sign}" ${stroke}/></g>`);
-        bounds(x - 2, y - 47, bodyX + width + lead + 2, y + 47);
+        // Draw in local coordinates so `scale` can wrap the whole glyph.
+        const leads = lead ? ` M 0,-22.5 L ${lead},-22.5 M 0,22.5 L ${lead},22.5 M ${lead + width},0 L ${lead + width + lead},0` : '';
+        const sign = options.sign === 'False' ? '' : ` M ${lead + 6.143},-22.5 L ${lead + 13.343},-22.5 M ${lead + 6.143},22.5 L ${lead + 13.343},22.5 M ${lead + 9.743},18.9 L ${lead + 9.743},26.1`;
+        const opampScale = zoom === 1 ? '' : ` scale(${zoom})`;
+        const opStroke = zoom === 1 ? stroke : stroke.replace(/stroke-width="2"/g, `stroke-width="${2 / zoom}"`);
+        elements.push(`<g transform="translate(${x} ${y})${opampScale}"><path d="M ${lead},-45 L ${lead + width},0 L ${lead},45 Z${leads}${sign}" ${opStroke}/></g>`);
+        const bx = x, by = y;
+        for (const [cx, cy] of [[lead, -45], [lead + width, 0], [lead, 45], [lead - 22.5, -22.5], [lead - 22.5, 22.5], [lead + width + lead, 0]]) {
+          bounds(bx + cx * zoom, by + cy * zoom, bx + cx * zoom, by + cy * zoom);
+        }
+        // Pin labels use Schemdraw's Opamp LabelHints (ofst in units, y up).
+        for (const label of labels) {
+          const hint = opampHints[label.loc];
+          const size = label.fontsize === undefined ? (hint ? hint[4] : labelSize) : label.fontsize;
+          const ox = Array.isArray(label.ofst) ? label.ofst[0] : (hint ? hint[0] : (label.ofst == null ? 0.1 : label.ofst));
+          let oy;
+          if (Array.isArray(label.ofst)) oy = label.ofst[1];
+          else if (hint) oy = hint[1];
+          else oy = (label.ofst == null ? 0.1 : label.ofst);
+          const anchorPoint = label.loc === 'center' ? [bodyX + width / 2 * zoom, y] : anchors[label.loc || 'center'];
+          const lx = anchorPoint[0] + ox * 36 * zoom;
+          const ly = anchorPoint[1] - oy * 36 * zoom;
+          const halign = label.halign || (hint ? hint[2] : 'center');
+          const valign = label.valign || (hint ? hint[3] : 'center');
+          const anchorText = { left: 'start', center: 'middle', right: 'end' }[halign];
+          const baseline = valign === 'center' ? 'central' : valign === 'top' ? 'hanging' : 'ideographic';
+          const lines = String(label.text).split('\n');
+          const yAttr = valign === 'center' ? ly - (lines.length + 1) / 2 * size
+            : valign === 'top' ? ly - size
+              : ly - lines.length * size;
+          const spans = lines.map(line => `<tspan x="${lx}" dy="${size}">${labelContent(line)}</tspan>`).join('');
+          const visible = label.text.startsWith('$') && label.text.endsWith('$') ? label.text.replace(/[$_{}]/g, '') : label.text;
+          const w = Math.max(12, Array.from(visible).length * size * 0.71);
+          bounds(lx - w, yAttr - size, lx + w, yAttr + (lines.length + 1) * size);
+          elements.push(`<text x="${lx}" y="${yAttr}" text-anchor="${anchorText}" dominant-baseline="${baseline}"${label.color ? ` fill="${label.color}"` : textFill} font-family="sans-serif" font-size="${size}">${spans}</text>`);
+        }
         if (name) {
           names[name] = anchors;
           namedBoxes[name] = { ...elemBox };
@@ -4180,7 +4695,7 @@
       }
       if (['to', 'tox', 'toy'].filter(key => key in options).length > 1) throw new Error('to, tox, and toy cannot be specified together.');
       if ('anchor' in options && ['to', 'tox', 'toy', 'endpoints'].some(key => key in options)) throw new Error('anchor cannot be combined with to, tox, toy, or endpoints.');
-      if ((selectedDirection || length !== null) && ('to' in options || 'tox' in options || 'toy' in options)) throw new Error('A direction or length cannot be combined with to/tox/toy.');
+      if ((length !== null) && ('to' in options || (('tox' in options || 'toy' in options) && !('theta' in options)))) throw new Error(`A length cannot be combined with to/tox/toy (${type}).`);
       let targetPoint = null;
       if ('to' in options || 'endpoints' in options) {
         if ('endpoints' in options) {
@@ -4198,10 +4713,30 @@
         else direction = Math.atan2(-vy, vx) * 180 / Math.PI;
       } else if ('tox' in options) {
         const target = point(options.tox)[0];
-        direction = target < x ? 'left' : 'right'; length = Math.abs(target - x);
+        if ('theta' in options) {
+          // Schemdraw sets the length from the horizontal distance and the
+          // angle, then places the element along theta: end = start + l·(cosθ, sinθ).
+          const th = Number(options.theta) * Math.PI / 180;
+          const dxu = x - target;
+          const dyu = Math.tan(th) * dxu;
+          length = Math.hypot(dxu, dyu);
+          direction = Number(options.theta);
+        } else {
+          direction = target < x ? 'left' : 'right'; length = Math.abs(target - x);
+        }
       } else if ('toy' in options) {
         const target = point(options.toy)[1];
-        direction = target < y ? 'up' : 'down'; length = Math.abs(target - y);
+        if ('theta' in options) {
+          // Schemdraw sets the length from the vertical distance and the angle,
+          // then places the element along theta.
+          const th = Number(options.theta) * Math.PI / 180;
+          const dyu = -(target - y);
+          const dxu = dyu / Math.tan(th);
+          length = Math.hypot(dxu, dyu);
+          direction = Number(options.theta);
+        } else {
+          direction = target < y ? 'up' : 'down'; length = Math.abs(target - y);
+        }
       } else if ('theta' in options) {
         const degrees = ((Number(options.theta) % 360) + 360) % 360;
         direction = ({ 0: 'right', 90: 'up', 180: 'left', 270: 'down' })[degrees] || Number(options.theta);
@@ -4216,7 +4751,7 @@
       if (type === 'Capacitor' && length < 6.48) throw new Error('Capacitor length is too short.');
       if (['Diode', 'Zener', 'LED', 'Diac', 'SCR', 'Triac'].includes(type) && length < 12.6) throw new Error(`${type} length is too short.`);
       const partDef = twoTerminalParts[type];
-      if (zoom !== 1 && !(partDef && (partDef.form === 'glyph' || ['Source', 'SourceV', 'SourceSin', 'Line'].includes(type)))) throw new Error(`scale is not supported for ${type}.`);
+      if (zoom !== 1 && !(partDef && (partDef.form === 'glyph' || partDef.form === 'path' || ['Source', 'SourceV', 'SourceSin', 'Line'].includes(type))) && !['Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE'].includes(type)) throw new Error(`scale is not supported for ${type}.`);
       if (partDef && partDef.form === 'glyph' && length < partDef.half * 2) throw new Error(`${type} length is too short.`);
       if (['Potentiometer', 'Rshunt', 'Fuse'].includes(type) && length < 36) throw new Error(`${type} length is too short.`);
       if (['BjtNpn2', 'BjtPnp2', 'BjtPnp2c2'].includes(type) && length < 39.6) throw new Error(`${type} length is too short.`);
@@ -4256,7 +4791,7 @@
       if ('anchor' in options) {
         // Schemdraw's .anchor(name): shift the element so the named local
         // anchor lands on the current drawing position (or the `at` point).
-        const localAnchors = twoTerminalLocalAnchors(type, length, shiftOffset, sy, options, { tapH, batterySpan, coaxRadius, coaxLead, bulk });
+        const localAnchors = twoTerminalLocalAnchors(type, length, shiftOffset, sy, options, { tapH, zoom, batterySpan, coaxRadius, coaxLead, triaxLead, triaxR1, triaxR2, triaxOfsStart, triaxOfsEnd, bulk });
         if (!Object.prototype.hasOwnProperty.call(localAnchors, options.anchor)) throw new Error(`Unknown ${type} anchor: ${options.anchor}`);
         const [ax, ay] = localAnchors[options.anchor];
         x -= ax * dx - ay * dy;
@@ -4396,12 +4931,24 @@
         shapeExtra = glyph;
       }
       if (type === 'Triax') {
-        if (length !== 108) throw new Error('Triax only supports its default length of 3.');
-        path = `M 0,0 L 21.6,0 M 91.8,0 L 108,0`;
-        let glyph = `<ellipse cx="21.6" cy="0" rx="5.4" ry="10.8" fill="none" stroke="${color}" stroke-width="2"/>`;
-        glyph += `<path d="M 21.6,${-10.8 * sy} L 41.753,${-10.8 * sy} M 21.6,${10.8 * sy} L 41.753,${10.8 * sy} M 32.4,${-21.6 * sy} L 75.6,${-21.6 * sy} M 32.4,${21.6 * sy} L 75.6,${21.6 * sy} M 84.953,${-10.8 * sy} L 86.4,${-10.8 * sy} M 84.953,${10.8 * sy} L 86.4,${10.8 * sy}" ${stroke}/>`;
-        glyph += `<path d="M 86.4,${-10.8 * sy} a 5.4 10.8 0 1 ${sy === 1 ? 1 : 0} 0 ${21.6 * sy} M 23.047,${-10.8 * sy} a 10.8 21.6 0 1 ${sy === 1 ? 1 : 0} 0 ${21.6 * sy} M 75.6,${-21.6 * sy} a 10.8 21.6 0 1 ${sy === 1 ? 1 : 0} 0 ${43.2 * sy}" ${stroke}/>`;
-        shapeExtra = glyph;
+        // Schemdraw Triax (elements/cables.py): length, leadlen, radiusinner,
+        // radiusouter, shieldofststart, shieldofstend (all in units).
+        const L = length, lead = triaxLead, r1 = triaxR1, r2 = triaxR2, ofsS = triaxOfsStart, ofsE = triaxOfsEnd;
+        if (r2 < r1) throw new Error('Triax inner radius > outer radius');
+        const xshield = r2 / 2 * Math.sqrt(1 - r1 * r1 / (r2 * r2));
+        // The path is the center conductor; the guard and shield are glyphs.
+        path = `M 0,0 L ${lead},0 M ${L - lead + r1 / 2},0 L ${L},0`;
+        const lx = lead + ofsS, rx = L - lead - ofsE;
+        let glyph = `<ellipse cx="${lead}" cy="0" rx="${r1 / 2}" ry="${r1}" fill="none" stroke="${color}" stroke-width="2"/>`;
+        glyph += `<path d="M ${lead},${-r1} L ${lx + xshield},${-r1} M ${lead},${r1} L ${lx + xshield},${r1}" ${stroke}/>`;
+        glyph += `<path d="M ${L - lead - ofsE + xshield},${-r1} L ${L - lead},${-r1} M ${L - lead - ofsE + xshield},${r1} L ${L - lead},${r1}" ${stroke}/>`;
+        glyph += `<path d="M ${L - lead},${-r1} a ${r1 / 2} ${r1} 0 1 1 0 ${2 * r1}" ${stroke}/>`;
+        glyph += `<path d="M ${lx},${-r2} L ${rx},${-r2} M ${lx},${r2} L ${rx},${r2}" ${stroke}/>`;
+        // Shield end caps: Schemdraw emits these as SVG arcs from top to bottom
+        // with sweep=1 (bulging outward).
+        glyph += `<path d="M ${lx - xshield},${-r1} a ${r2 / 2} ${r2} 0 1 1 0 ${2 * r1}" ${stroke}/>`;
+        glyph += `<path d="M ${rx},${-r2} a ${r2 / 2} ${r2} 0 1 1 0 ${2 * r2}" ${stroke}/>`;
+        shapeExtra = sy === -1 ? `<g transform="scale(1 -1)">${glyph}</g>` : glyph;
       }
       if (type === 'Motor') {
         const c = length / 2 + shiftOffset, a = c - 25.92;
@@ -4536,17 +5083,24 @@
         shapeExtra = reverseGroup(glyph, c);
       }
       if (type === 'Potentiometer' || type === 'PotentiometerIEEE') {
-        const c = length / 2 + shiftOffset, a = c - 18, b = c + 18;
+        // `scale` zooms the whole glyph (body + wiper) about its centre, while
+        // the leads still span the element length (Schemdraw's zoom).
+        const s = zoom;
+        const c = length / 2 + shiftOffset, a = c - 18 * s, b = c + 18 * s;
         path = `M 0,0 L ${a},0 M ${b},0 L ${length},0`;
-        const glyph = `<path d="M ${a},0 L ${a + 3},${-9 * sy} L ${a + 9},${9 * sy} L ${a + 15},${-9 * sy} L ${a + 21},${9 * sy} L ${a + 27},${-9 * sy} L ${a + 33},${9 * sy} L ${b},0" ${stroke}/>`;
-        // Schemdraw draws the wiper arrow from the tap to the body and insets
-        // the arrow tip by 2 units from the body top.
-        shapeExtra = reverseGroup(glyph, c) + `<path d="M ${c},${-tapH * sy} L ${c},${-18 * sy}" ${stroke}/><path d="M ${c},${-11 * sy} L ${c - 2.7},${-18 * sy} L ${c + 2.7},${-18 * sy} Z" fill="${color}"/>`;
+        const glyph = `<path d="M ${a},0 L ${a + 3 * s},${-9 * s * sy} L ${a + 9 * s},${9 * s * sy} L ${a + 15 * s},${-9 * s * sy} L ${a + 21 * s},${9 * s * sy} L ${a + 27 * s},${-9 * s * sy} L ${a + 33 * s},${9 * s * sy} L ${b},0" ${stroke}/>`;
+        // Schemdraw draws the wiper arrow from the tap to the body; the head is
+        // a fixed-size triangle whose tip stops 2 px short of the body edge
+        // (body half-height 9 px, scaled by `zoom`).
+        const tapTip = 9 * s + 2, tapBase = tapTip + 7;
+        shapeExtra = reverseGroup(glyph, c) + `<path d="M ${c},${-tapH * s * sy} L ${c},${-tapBase * sy}" ${stroke}/><path d="M ${c},${-tapTip * sy} L ${c - 2.7},${-tapBase * sy} L ${c + 2.7},${-tapBase * sy} Z" fill="${color}"/>`;
       }
       if (type === 'PotentiometerIEC') {
-        const c = length / 2 + shiftOffset, a = c - 18;
-        path = `M 0,0 L ${a},0 M ${a + 36},0 L ${length},0`;
-        const glyph = `<path d="M ${a},0 L ${a},${-9 * sy} L ${a + 36},${-9 * sy} L ${a + 36},${9 * sy} L ${a},${9 * sy} L ${a},0 M ${c},${-tapH * sy} L ${c},${-18 * sy}" ${stroke}/><path d="M ${c},${-11 * sy} L ${c - 2.7},${-18 * sy} L ${c + 2.7},${-18 * sy} Z" fill="${color}"/>`;
+        const s = zoom;
+        const c = length / 2 + shiftOffset, a = c - 18 * s;
+        path = `M 0,0 L ${a},0 M ${a + 36 * s},0 L ${length},0`;
+        const tapTip = 9 * s + 2, tapBase = tapTip + 7;
+        const glyph = `<path d="M ${a},0 L ${a},${-9 * s * sy} L ${a + 36 * s},${-9 * s * sy} L ${a + 36 * s},${9 * s * sy} L ${a},${9 * s * sy} L ${a},0 M ${c},${-tapH * s * sy} L ${c},${-tapBase * sy}" ${stroke}/><path d="M ${c},${-tapTip * sy} L ${c - 2.7},${-tapBase * sy} L ${c + 2.7},${-tapBase * sy} Z" fill="${color}"/>`;
         shapeExtra = reverseGroup(glyph, c);
       }
       if (type === 'Rshunt') {
@@ -4598,7 +5152,7 @@
           barsPath += `M ${a + i * 6.75},${-h * sy} L ${a + i * 6.75},${h * sy} `;
         }
         path = `M 0,0 L ${a},0 M ${a + batterySpan},0 L ${length},0`;
-        shapeExtra = `<path d="${barsPath}" ${stroke}/>`;
+        shapeExtra = reverseGroup(`<path d="${barsPath}" ${stroke}/>`, length / 2 + shiftOffset);
       }
       let shape, fixedText = '';
       const dpAnchors = {};
@@ -4655,12 +5209,16 @@
             ? `<circle cx="54" cy="0" r="18" fill="none" stroke="${color}" stroke-width="2"/>`
             : `<circle cx="54" cy="0" r="${18 * zoom}" fill="none" stroke="${color}" stroke-width="2"/>`)
           : '';
-        const reflected = ('reverse' in options && !['Potentiometer', 'Rshunt', 'SCR', 'Triac', 'BjtNpn2', 'BjtPnp2', 'NMos2', 'PMos2', 'ResistorVar'].includes(type)) ? ' transform="translate(108 0) scale(-1 1)"' : '';
+        const reflected = ('reverse' in options && !['Potentiometer', 'Rshunt', 'SCR', 'Triac', 'BjtNpn2', 'BjtPnp2', 'NMos2', 'PMos2', 'ResistorVar'].includes(type))
+          ? ` transform="translate(${2 * (length / 2 + shiftOffset)} 0) scale(-1 1)"` : '';
         if (type === 'Gap') shape = '';
-        else if (zoom !== 1) {
+        else if (zoom !== 1 && !['Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE'].includes(type)) {
           // Zoom the fixed 108-unit glyph about its centre, then add leads.
+          // The group scale also scales stroke widths, so divide them back.
           const c = length / 2 + shiftOffset, half = 54 * zoom;
-          shape = `<g transform="translate(${c} 0) scale(${zoom}) translate(-54 0)">${circle}<path d="${path}"${reflected} ${stroke}/></g>` +
+          const zstroke = stroke.replace(/stroke-width="2"/g, `stroke-width="${2 / zoom}"`);
+          const zcircle = circle.replace(/stroke-width="2"/g, `stroke-width="${2 / zoom}"`);
+          shape = `<g transform="translate(${c} 0) scale(${zoom}) translate(-54 0)">${zcircle}<path d="${path}"${reflected} ${zstroke}/></g>` +
             `<path d="M 0,0 L ${c - half},0 M ${c + half},0 L ${length},0" ${stroke}/>`;
         } else shape = `${circle}<path d="${path}"${reflected} ${stroke}/>`;
       }
@@ -4695,12 +5253,14 @@
         if (arrow.includes('<')) shape += `<path d="M 2,0 L 9,2.7 L 9,-2.7 Z" fill="${color}"/>`;
         if (arrow.includes('>')) shape += `<path d="M ${length - 2},0 L ${length - 9},2.7 L ${length - 9},-2.7 Z" fill="${color}"/>`;
         if (arrow.startsWith('|')) shape += `<path d="M 0,-2.7 L 0,2.7" ${stroke}/>`;
+        if (arrow.startsWith('o')) shape += `<circle cx="0" cy="0" r="2.7" fill="${color}" stroke="${color}" stroke-width="2"/>`;
         if (arrow.endsWith('o')) shape += `<circle cx="${length}" cy="0" r="2.7" fill="${color}" stroke="${color}" stroke-width="2"/>`;
         // Short lines can put arrow bases beyond the opposite terminal.
         const points = [];
         if (arrow.includes('<')) points.push([0, 0], [9, 2.7], [9, -2.7]);
         if (arrow.includes('>')) points.push([length, 0], [length - 9, 2.7], [length - 9, -2.7]);
         if (arrow.startsWith('|')) points.push([0, -2.7], [0, 2.7]);
+        if (arrow.startsWith('o')) points.push([-2.7, -2.7], [2.7, 2.7], [-2.7, 2.7], [2.7, -2.7]);
         if (arrow.endsWith('o')) points.push([length - 3.7, -3.7], [length + 3.7, 3.7], [length - 3.7, 3.7], [length + 3.7, -3.7]);
         for (const [px, py] of points) {
           const bx = x + dx * px - dy * py, by = y + dy * px + dx * py;
@@ -4866,60 +5426,100 @@
       if (arbitraryAngle) bounds(centerX - 20, centerY - 20, centerX + 20, centerY + 20);
       if (isSource) bounds(bodyCenterX - 20, bodyCenterY - 20, bodyCenterX + 20, bodyCenterY + 20);
       // dot / idot draw at the element ends; "open" leaves the circle hollow.
+      // Schemdraw's Element2Term uses dotradius 0.075 (2.7 px); the element
+      // transform scales it with `scale`.
+      const dotRadius = 2.7 * zoom;
       for (const [key, px, py] of [['idot', x, y], ['dot', endX, endY]]) {
         if (!(key in options)) continue;
         if (options[key] === 'open') {
-          whiteMarker(px, py, 3.6, color);
-        } else elements.push(`<circle cx="${px}" cy="${py}" r="3.6" fill="${color}"/>`);
+          whiteMarker(px, py, dotRadius, color);
+        } else elements.push(`<circle cx="${px}" cy="${py}" r="${dotRadius}" fill="${color}" stroke="${color}" stroke-width="2"/>`);
       }
       for (const label of labels) {
         if (label.items) {
-          // Schemdraw distributes a list label along one edge of the element.
-          // `loc` picks the edge; like schemdraw, the side is mirrored when the
-          // element points left/down so the list keeps the same visual side.
-          const listTheta = arbitraryAngle ? direction : ({ right: 0, up: 90, left: 180, down: -90 })[direction];
-          const listNorm = ((listTheta % 360) + 360) % 360;
-          let listLoc = label.loc || 'top';
-          if (listNorm > 90 && listNorm <= 270) {
-            listLoc = { top: 'bot', bot: 'top', bottom: 'top', left: 'right', right: 'left' }[listLoc] || listLoc;
+          // Schemdraw's _place_label list branch: items are spread evenly along
+          // one bbox edge (top/bottom: along x, left/right: along y, center:
+          // along x at the middle). Alignment comes from _align_label.
+          const extents = sideExtent(type);
+          const above = 'flip' in options ? extents[1] : extents[0];
+          const below = 'flip' in options ? extents[0] : extents[1];
+          const dotR = 2.7;
+          const bx1 = ('idot' in options ? -dotR : 0);
+          const bx2 = length + ('dot' in options ? dotR : 0);
+          const thetaDeg = arbitraryAngle ? direction : ({ right: 0, up: 90, left: 180, down: 270 })[direction];
+          let listLoc = label.loc || (type === 'Gap' ? 'center' : 'top');
+          if (listLoc === 'bot') listLoc = 'bottom';
+          if (thetaDeg > 90 && thetaDeg <= 270) {
+            listLoc = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' }[listLoc] || listLoc;
           }
-          const perp = arbitraryAngle ? 19 : dy ? 13 : 19;
-          const ofst = Array.isArray(label.ofst) ? label.ofst : [0, label.ofst == null ? 0 : label.ofst];
-          const size = label.fontsize === undefined ? 14 : label.fontsize;
+          let ox = 0, oy = 0;
+          const ofst = label.ofst == null ? (type === 'Gap' ? 0 : 0.1) : label.ofst;
+          if (Array.isArray(ofst)) { ox = ofst[0] * 36; oy = ofst[1] * 36; }
+          else {
+            const o = ofst * 36;
+            if (listLoc === 'top') oy = o;
+            else if (listLoc === 'bottom') oy = -o;
+            else if (listLoc === 'left') ox = -o;
+            else if (listLoc === 'right') ox = o;
+            else oy = o;
+          }
+          if (listLoc === 'top' || listLoc === 'bottom') ox += shiftOffset;
+          const th = ((thetaDeg + (listLoc === 'left' ? 90 : listLoc === 'bottom' ? 180 : listLoc === 'right' ? 270 : 0)) % 360 + 360) % 360;
+          const rotalign = listLoc === 'center' ? ['center', 'center'] : [
+            ['center', 'bottom'], ['right', 'bottom'], ['right', 'center'], ['right', 'top'],
+            ['center', 'top'], ['left', 'top'], ['left', 'center'], ['left', 'bottom']
+          ][Math.round(th / 45) % 8];
+          const halign = label.halign || rotalign[0];
+          const valign = label.valign || rotalign[1];
+          const anchor = { left: 'start', center: 'middle', right: 'end' }[halign];
+          const baseline = valign === 'center' ? 'central' : valign === 'top' ? 'hanging' : 'ideographic';
+          const size = label.fontsize === undefined ? labelSize : label.fontsize;
           const items = label.items;
+          const n = items.length;
           items.forEach((text, i) => {
-            const fraction = (i + 1) / (items.length + 1);
-            let along = length * fraction + shiftOffset, across = 0;
-            if (listLoc === 'top') across = -perp;
-            else if (listLoc === 'bot' || listLoc === 'bottom') across = perp;
-            else if (listLoc === 'center') across = 0;
-            else if (listLoc === 'left' || listLoc === 'right') {
-              // Left / right edges run across the element, as in schemdraw.
-              along = listLoc === 'left' ? 0 : length;
-              across = ((i + 1) / (items.length + 1)) * 18 - 9;
+            let px, py;
+            if (listLoc === 'top' || listLoc === 'bottom' || listLoc === 'center') {
+              px = bx1 + (bx2 - bx1) / (n + 1) * (i + 1);
+              py = listLoc === 'top' ? above : listLoc === 'bottom' ? -below : (above - below) / 2;
+            } else {
+              px = listLoc === 'left' ? bx1 : bx2;
+              py = -below + (above + below) / (n + 1) * (i + 1);
             }
-            let lx = x + dx * along - dy * across;
-            let ly = y + dy * along + dx * across;
-            if (arbitraryAngle || dy) ly += 5;
-            lx += ofst[0] * 36;
-            ly -= ofst[1] * 36;
-            // Offset direction decides the text anchor and baseline.
-            const offX = -dy * across, offY = dx * across;
-            const horizontalSide = Math.abs(offX) > Math.abs(offY);
-            const anchor = label.halign ? { left: 'start', center: 'middle', right: 'end' }[label.halign]
-              : arbitraryAngle ? 'end'
-                : dy ? (offX < 0 ? 'end' : 'start')
-                  : 'middle';
-            const baseline = listLoc === 'center' ? ' dominant-baseline="central"'
-              : horizontalSide ? '' : offY < 0 ? '' : ' dominant-baseline="hanging"';
+            const localX = px + ox, localY = -(py + oy);
+            const wx = x + dx * localX - dy * localY;
+            const wy = y + dy * localX + dx * localY;
+            const lines = String(text).split('\n');
+            const yAttr = valign === 'center' ? wy - (lines.length + 1) / 2 * size
+              : valign === 'top' ? wy - size
+                : wy - lines.length * size;
+            const spans = lines.map(line => `<tspan x="${wx}" dy="${size}">${labelContent(line)}</tspan>`).join('');
             const visible = text.startsWith('$') && text.endsWith('$') ? text.replace(/[$_{}]/g, '') : text;
             const width = Math.max(12, Array.from(visible).length * size * 0.71);
-            bounds(lx - width, ly - size, lx + width, ly + size);
-            elements.push(`<text x="${lx}" y="${ly}" text-anchor="${anchor}"${baseline}${label.color ? ` fill="${label.color}"` : textFill} font-family="sans-serif" font-size="${size}">${labelContent(text)}</text>`);
+            bounds(wx - width, yAttr - size, wx + width, yAttr + (lines.length + 1) * size);
+            elements.push(`<text x="${wx}" y="${yAttr}" text-anchor="${anchor}" dominant-baseline="${baseline}"${label.color ? ` fill="${label.color}"` : textFill} font-family="sans-serif" font-size="${size}">${spans}</text>`);
           });
           continue;
         }
-        if (type === 'Resistor' && (!label.loc || label.loc === 'top')) {
+        if (label.loc === 'istart' || label.loc === 'iend') {
+          // Schemdraw's Source anchors istart/iend mark the ends of the 1-unit
+          // body. The label sits at that anchor + ofst (local coordinates,
+          // y up); reverse mirrors the ofst x.
+          if (type !== 'MeterArrow') throw new Error(`${type} does not support ${label.loc} labels.`);
+          const bc = length / 2 + shiftOffset;
+          const base = bc + (label.loc === 'iend' ? 18 : -18);
+          let ox = 0, oy = 0;
+          if (Array.isArray(label.ofst)) { ox = label.ofst[0]; oy = label.ofst[1]; }
+          else if (label.ofst != null) oy = label.ofst;
+          if ('reverse' in options) ox = -ox;
+          const localX = base + ox * 36, localY = -oy * 36;
+          const lx = x + dx * localX - dy * localY, ly = y + dy * localX + dx * localY;
+          const size = label.fontsize === undefined ? labelSize : label.fontsize;
+          const width = Math.max(size, Array.from(label.text).length * size * 0.71);
+          bounds(lx - width, ly - size, lx + width, ly + size);
+          elements.push(`<text x="${lx}" y="${ly - size}" dominant-baseline="central" text-anchor="middle"${label.color ? ` fill="${label.color}"` : textFill} font-family="sans-serif" font-size="${size}"><tspan x="${lx}" dy="${size}">${labelContent(label.text)}</tspan></text>`);
+          continue;
+        }
+        if (type === 'Resistor' && (!label.loc || label.loc === 'top') && label.rotate !== undefined) {
           const theta = arbitraryAngle ? direction : ({ right: 0, up: 90, left: 180, down: -90 })[direction];
           const norm = ((theta % 360) + 360) % 360;
           const flipped = norm > 90 && norm <= 270;
@@ -4952,6 +5552,70 @@
           elements.push(`<text x="${lx}" y="${ly - labelSize}" text-anchor="start" dominant-baseline="central"${textFill} font-family="sans-serif" font-size="${labelSize}"><tspan x="${lx}" dy="${labelSize}">${labelContent(label.text)}</tspan></text>`);
           continue;
         }
+        if ((Object.prototype.hasOwnProperty.call(twoTerminalParts, type) || ['Gap', 'Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE', 'Rshunt', 'SCR', 'Triac'].includes(type)) && !label.items && label.rotate === undefined) {
+          // Schemdraw's Element.label/_place_label for a single label:
+          // the anchor is a point on the element's local bbox, `ofst` is added
+          // in local coordinates, and the text alignment comes from the
+          // rotated `rotalign` table. Text is then drawn upright at the
+          // transformed point (rotation_global defaults to True).
+          const extents = sideExtent(type);
+          const above = 'flip' in options ? extents[1] : extents[0];
+          const below = 'flip' in options ? extents[0] : extents[1];
+          const dotR = 2.7;
+          const bx1 = ('idot' in options ? -dotR : 0);
+          const bx2 = length + ('dot' in options ? dotR : 0);
+          const thetaDeg = arbitraryAngle ? direction : ({ right: 0, up: 90, left: 180, down: 270 })[direction];
+          let labelLoc = label.loc || (['Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE', 'LED', 'LED2', 'Photodiode'].includes(type) ? 'bottom' : type === 'Gap' ? 'center' : 'top');
+          if (labelLoc === 'bot') labelLoc = 'bottom';
+          if (thetaDeg > 90 && thetaDeg <= 270) {
+            labelLoc = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' }[labelLoc] || labelLoc;
+          }
+          let ax, ay;
+          if (labelLoc === 'top') { ax = (bx1 + bx2) / 2; ay = above; }
+          else if (labelLoc === 'bottom') { ax = (bx1 + bx2) / 2; ay = -below; }
+          else if (labelLoc === 'left') { ax = bx1; ay = (above - below) / 2; }
+          else if (labelLoc === 'right') { ax = bx2; ay = (above - below) / 2; }
+          else if (labelLoc === 'center') { ax = (bx1 + bx2) / 2; ay = (above - below) / 2; }
+          else throw new Error(`Unsupported ${type} label loc: ${labelLoc}`);
+          let ox = 0, oy = 0;
+          const ofst = label.ofst == null ? (type === 'Gap' ? 0 : 0.1) : label.ofst;
+          if (Array.isArray(ofst)) { ox = ofst[0] * 36; oy = ofst[1] * 36; }
+          else {
+            const o = ofst * 36;
+            if (labelLoc === 'top') oy = o;
+            else if (labelLoc === 'bottom') oy = -o;
+            else if (labelLoc === 'left') ox = -o;
+            else if (labelLoc === 'right') ox = o;
+            else oy = o;
+          }
+          // Schemdraw adds the element's shift to the along-axis offset for
+          // top/bottom labels (params['_shift_magnitude']).
+          if (labelLoc === 'top' || labelLoc === 'bottom') ox += shiftOffset;
+          const th = ((thetaDeg + (labelLoc === 'left' ? 90 : labelLoc === 'bottom' ? 180 : labelLoc === 'right' ? 270 : 0)) % 360 + 360) % 360;
+          const rotalign = labelLoc === 'center' ? ['center', 'center'] : [
+            ['center', 'bottom'], ['right', 'bottom'], ['right', 'center'], ['right', 'top'],
+            ['center', 'top'], ['left', 'top'], ['left', 'center'], ['left', 'bottom']
+          ][Math.round(th / 45) % 8];
+          const halign = label.halign || rotalign[0];
+          const valign = label.valign || rotalign[1];
+          const localX = ax + ox, localY = -(ay + oy);
+          const wx = x + dx * localX - dy * localY;
+          const wy = y + dy * localX + dx * localY;
+          const lines = String(label.text).split('\n');
+          const size = label.fontsize === undefined ? labelSize : label.fontsize;
+          const anchor = { left: 'start', center: 'middle', right: 'end' }[halign];
+          const baseline = valign === 'center' ? 'central' : valign === 'top' ? 'hanging' : 'ideographic';
+          const yAttr = valign === 'center' ? wy - (lines.length + 1) / 2 * size
+            : valign === 'top' ? wy - size
+              : wy - lines.length * size;
+          const spans = lines.map(line => `<tspan x="${wx}" dy="${size}">${labelContent(line)}</tspan>`).join('');
+          const visible = label.text.startsWith('$') && label.text.endsWith('$') ? label.text.replace(/[$_{}]/g, '') : label.text;
+          const textW = Math.max(12, Array.from(visible).length * size * 0.71);
+          bounds(wx - (anchor === 'start' ? 0 : anchor === 'end' ? textW : textW / 2), yAttr,
+            wx + (anchor === 'end' ? 0 : anchor === 'start' ? textW : textW / 2), yAttr + (lines.length + 1) * size);
+          elements.push(`<text x="${wx}" y="${yAttr}" text-anchor="${anchor}" dominant-baseline="${baseline}"${textFill} font-family="sans-serif" font-size="${size}">${spans}</text>`);
+          continue;
+        }
         let loc = label.loc || (['BjtNpn2', 'BjtPnp2', 'BjtPnp2c2', 'NMos2', 'PMos2', 'NFet2', 'PFet2', 'JFetN2', 'JFetP2'].includes(type)
           ? (arbitraryAngle ? 'top' : dy ? 'left' : ('flip' in options ? 'top' : 'bot'))
           : ((['Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE', 'LED', 'LED2', 'Photodiode'].includes(type)) && !dy) ? 'bot' : arbitraryAngle ? 'top' : dy ? 'left' : 'top');
@@ -4959,6 +5623,7 @@
         // Schemdraw keeps `top`/`bottom` on the same visual side: for an element
         // pointing up or down they are the long sides, not above/below.
         const verticalSide = Math.abs(dy) > Math.abs(dx);
+        const origLoc = loc;
         if (verticalSide) {
           if (loc === 'top') loc = 'left';
           else if (loc === 'bot') loc = 'right';
@@ -4988,9 +5653,22 @@
         // A rotated label is centred on its anchor; the side nudges below only
         // apply to horizontal text.
         // A source's side label clears its circle: schemdraw uses radius * 1.2.
-        const sideGap = dy ? (isSource ? 18 * zoom * 1.2 : 13) : 6;
-        if (loc === 'left') { lx = Math.min(x, endX) - sideGap; ly += rotated || isSource ? 0 : 5; anchor = rotated ? 'middle' : 'end'; }
-        if (loc === 'right') { lx = Math.max(x, endX) + sideGap; ly += rotated || isSource ? 0 : 5; anchor = rotated ? 'middle' : 'start'; }
+        // For vertical elements the label anchor is the element bbox edge plus
+        // the schematic label offset (lblofst = 0.1 unit), like _place_label.
+        const extents = sideExtent(type);
+        const extAbove = 'flip' in options ? extents[1] : extents[0];
+        const extBelow = 'flip' in options ? extents[0] : extents[1];
+        const sideGap = dy
+          ? (verticalSide ? (origLoc === 'bot' ? extBelow : extAbove) + 3.6 : (isSource ? 18 * zoom * 1.2 : 13))
+          : 6;
+        if (loc === 'left') { lx = Math.min(x, endX) - sideGap; ly += rotated || isSource || verticalSide ? 0 : 5; anchor = rotated ? 'middle' : 'end'; }
+        if (loc === 'right') { lx = Math.max(x, endX) + sideGap; ly += rotated || isSource || verticalSide ? 0 : 5; anchor = rotated ? 'middle' : 'start'; }
+        let vLines = null;
+        if (verticalSide && !arbitraryAngle && !rotated) {
+          // Schemdraw's SegmentText uses valign 'center' for side labels:
+          // text y = anchor - (lines+1)/2·size with one tspan dy=size per line.
+          vLines = label.text.split('\n');
+        }
         // `ofst` is in element coordinates: x along the element, y perpendicular
         // (positive is the element's "up"). A single number moves away from the
         // side chosen by `loc`, as in schemdraw.
@@ -5029,7 +5707,15 @@
               : rotated || (isSource && (loc === 'left' || loc === 'right')) ? ' dominant-baseline="central"'
                 : arbitraryAngle && loc === 'top' ? ' dominant-baseline="ideographic"' : '';
         const transform = rotation ? ` transform="rotate(${-rotation} ${lx} ${ly})"` : '';
-        elements.push(`<text x="${lx}" y="${ly}" text-anchor="${anchor}"${baseline}${transform}${textFill} font-family="sans-serif" font-size="${labelSize}">${labelContent(label.text)}</text>`);
+        if (vLines) {
+          const size = label.fontsize === undefined ? labelSize : label.fontsize;
+          const yAttr = ly - (vLines.length + 1) / 2 * size;
+          const spans = vLines.map(line => `<tspan x="${lx}" dy="${size}">${labelContent(line)}</tspan>`).join('');
+          bounds(lx - width, yAttr, lx + width, yAttr + (vLines.length + 1) * size);
+          elements.push(`<text x="${lx}" y="${yAttr}" text-anchor="${anchor}" dominant-baseline="central"${textFill} font-family="sans-serif" font-size="${size}">${spans}</text>`);
+        } else {
+          elements.push(`<text x="${lx}" y="${ly}" text-anchor="${anchor}"${baseline}${transform}${textFill} font-family="sans-serif" font-size="${labelSize}">${labelContent(label.text)}</text>`);
+        }
       }
       // Redraw white contact dots above all leads. Schemdraw draws these
       // circles with a higher zorder, so later wires do not show through.
@@ -5061,11 +5747,11 @@
         const local = (lx, ly) => [x + dx * lx - dy * ly, y + dy * lx + dx * ly];
         const bodyCenter = length / 2 + shiftOffset;
         const mx = lx => 'reverse' in options ? 2 * bodyCenter - lx : lx;
-        if (['Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE'].includes(type)) anchors.tap = local(mx(bodyCenter), -tapH * sy);
+        if (['Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE'].includes(type)) anchors.tap = local(mx(bodyCenter), -tapH * zoom * sy);
         if (type === 'Rshunt') { anchors.v1 = local(mx(bodyCenter - 31.5), 18 * sy); anchors.v2 = local(mx(bodyCenter + 31.5), 18 * sy); }
         if (type === 'SCR') anchors.gate = local(mx(bodyCenter + 17.1), 18 * sy);
         if (type === 'Triac') anchors.gate = local(mx(bodyCenter + 24.3), -18 * sy);
-        if (type === 'BatteryDouble') anchors.tap = local(bodyCenter - batterySpan / 2 + 27, -13.5 * sy);
+        if (type === 'BatteryDouble') anchors.tap = local(mx(bodyCenter - batterySpan / 2 + 27), -13.5 * sy);
         if (type === 'BjtNpn2' || type === 'BjtPnp2' || type === 'BjtPnp2c2') {
           anchors.base = local(bodyCenter, -28.62 * sy);
           const emitterAtEnd = (type !== 'BjtNpn2') !== ('reverse' in options);
@@ -5143,6 +5829,10 @@
           dpAnchors.t3 = local(ax(right - px + 4.32), dpdt ? (pole2 - 14.4) * sy : pole2 * sy);
           if (dpdt) dpAnchors.t4 = local(ax(right - px + 4.32), (pole2 + 14.4) * sy);
         }
+        if (type === 'MeterArrow') {
+          anchors.istart = local(bodyCenter - 18, 0);
+          anchors.iend = local(bodyCenter + 18, 0);
+        }
         if (type === 'Inductor2') {
           const a = bodyCenter - 18, b = bodyCenter + 18;
           anchors.NW = local(mx(a), -22.32 * sy);
@@ -5155,24 +5845,25 @@
         }
         if (type === 'Coax') {
           const L = length, l = coaxLead, r = coaxRadius;
-          anchors.shieldstart = local(mx(l), -r * sy);
-          anchors.shieldstart_top = local(mx(l), r * sy);
-          anchors.shieldend = local(mx(L - l), -r * sy);
-          anchors.shieldend_top = local(mx(L - l), r * sy);
-          anchors.shieldcenter = local(mx(L / 2), -r * sy);
-          anchors.shieldcenter_top = local(mx(L / 2), r * sy);
+          anchors.shieldstart = local(mx(l), r * sy);
+          anchors.shieldstart_top = local(mx(l), -r * sy);
+          anchors.shieldend = local(mx(L - l), r * sy);
+          anchors.shieldend_top = local(mx(L - l), -r * sy);
+          anchors.shieldcenter = local(mx(L / 2), r * sy);
+          anchors.shieldcenter_top = local(mx(L / 2), -r * sy);
         }
         if (type === 'Triax') {
-          anchors.guardstart = local(mx(21.6), -10.8 * sy);
-          anchors.guardstart_top = local(mx(21.6), 10.8 * sy);
-          anchors.guardend = local(mx(86.4), -10.8 * sy);
-          anchors.guardend_top = local(mx(86.4), 10.8 * sy);
-          anchors.shieldstart = local(mx(32.4), -21.6 * sy);
-          anchors.shieldstart_top = local(mx(32.4), 21.6 * sy);
-          anchors.shieldend = local(mx(75.6), -21.6 * sy);
-          anchors.shieldend_top = local(mx(75.6), 21.6 * sy);
-          anchors.shieldcenter = local(mx(54), -21.6 * sy);
-          anchors.shieldcenter_top = local(mx(54), 21.6 * sy);
+          const L = length, l = triaxLead, r1 = triaxR1, r2 = triaxR2, os = triaxOfsStart, oe = triaxOfsEnd;
+          anchors.guardstart = local(mx(l), r1 * sy);
+          anchors.guardstart_top = local(mx(l), -r1 * sy);
+          anchors.guardend = local(mx(L - l), r1 * sy);
+          anchors.guardend_top = local(mx(L - l), -r1 * sy);
+          anchors.shieldstart = local(mx(l + os), r2 * sy);
+          anchors.shieldstart_top = local(mx(l + os), -r2 * sy);
+          anchors.shieldend = local(mx(L - l - oe), r2 * sy);
+          anchors.shieldend_top = local(mx(L - l - oe), -r2 * sy);
+          anchors.shieldcenter = local(mx(L / 2), r2 * sy);
+          anchors.shieldcenter_top = local(mx(L / 2), -r2 * sy);
         }
         Object.assign(anchors, dpAnchors);
         names[name] = anchors;

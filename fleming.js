@@ -1300,9 +1300,12 @@
       let x2 = y2.map(y => -y * y);
       const back = Math.min(...x2);
       x2 = x2.map(x => x - back);
-      const leadinEffU = leadin / px - (xor ? xorgapU : 0);
-      xs = xs.map(x => x + leadinEffU);
-      x2 = x2.map(x => x + leadinEffU);
+      // The body keeps the full `leadin`; only the input stubs are shortened
+      // by xorgap for XOR gates (Schemdraw's Xor does `_leadin -= xorgap`).
+      const leadinU = leadin / px;
+      const leadinEffU = leadinU - (xor ? xorgapU : 0);
+      xs = xs.map(x => x + leadinU);
+      x2 = x2.map(x => x + leadinU);
       const tipU = Math.max(...xs), orheightU = Math.abs(Math.min(...ys));
       const points = [];
       for (let i = 0; i < xs.length; i++) points.push([xs[i] * px, -ys[i] * px]);
@@ -1520,9 +1523,18 @@
       if (!Number.isFinite(result) || result <= 0) throw new Error(`Invalid length: ${value}`);
       return result;
     }
-    const m = /^d\.unit(?:\s*\/\s*(\d+(?:\.\d+)?))?$/.exec(value || '');
-    if (!m || (m[1] && Number(m[1]) === 0)) throw new Error(`Unsupported length expression: ${value}`);
-    return unit / (m[1] ? Number(m[1]) : 1);
+    // Schemdraw expressions such as `d.unit/4`, `d.unit*2`, or `d.unit/2*3`.
+    const m = /^d\.unit(?:\s*([*/])\s*(\d*\.?\d+))?(?:\s*([*/])\s*(\d*\.?\d+))?$/.exec(value || '');
+    if (!m) throw new Error(`Unsupported length expression: ${value}`);
+    let result = unit;
+    for (const [op, raw] of [[m[1], m[2]], [m[3], m[4]]]) {
+      if (op === undefined) continue;
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n <= 0) throw new Error(`Unsupported length expression: ${value}`);
+      result = op === '/' ? result / n : result * n;
+    }
+    if (!Number.isFinite(result) || result <= 0) throw new Error(`Unsupported length expression: ${value}`);
+    return result;
   }
 
   // Drawing.move uses signed drawing-unit offsets, not SVG coordinates.
@@ -1535,6 +1547,64 @@
     const result = (match[2] === undefined ? unit / divisor : Number(match[2]) * 36) * (match[1] === '-' ? -1 : 1);
     if (!Number.isFinite(result)) throw new Error(`Invalid move coordinate: ${value}`);
     return result;
+  }
+
+  // Safe arithmetic for move/move_from coordinates, as in schemdraw's
+  // `d.move_from(xy, dy=-(A1.out.y-A2.out.y)/2)`. Supports numbers, d.unit,
+  // named anchor coordinates (`A1.out.y`), + - * / and parentheses. No eval().
+  function readCoordinateExpression(value, unit, refs) {
+    if (typeof value !== 'string') throw new Error('Move coordinates must be a number or an expression.');
+    const source = value.replace(/\s+/g, '');
+    let index = 0;
+    const fail = () => { throw new Error(`Unsupported move coordinate: ${value}`); };
+    const parseExpr = () => {
+      let result = parseTerm();
+      while (source[index] === '+' || source[index] === '-') {
+        const op = source[index++];
+        const rhs = parseTerm();
+        result = op === '+' ? result + rhs : result - rhs;
+      }
+      return result;
+    };
+    const parseTerm = () => {
+      let result = parseFactor();
+      while (source[index] === '*' || source[index] === '/') {
+        const op = source[index++];
+        const rhs = parseFactor();
+        if (op === '/') {
+          if (rhs === 0) fail();
+          result /= rhs;
+        } else result *= rhs;
+      }
+      return result;
+    };
+    const parseFactor = () => {
+      if (source[index] === '-') { index++; return -parseFactor(); }
+      if (source[index] === '+') { index++; return parseFactor(); }
+      if (source[index] === '(') {
+        index++;
+        const inner = parseExpr();
+        if (source[index] !== ')') fail();
+        index++;
+        return inner;
+      }
+      const number = /^(?:\d+(?:\.\d*)?|\.\d+)/.exec(source.slice(index));
+      if (number) {
+        index += number[0].length;
+        return Number(number[0]);
+      }
+      const identifier = /^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+/.exec(source.slice(index));
+      if (identifier) {
+        index += identifier[0].length;
+        if (identifier[0] === 'd.unit') return unit / 36;
+        if (!Object.prototype.hasOwnProperty.call(refs, identifier[0])) fail();
+        return refs[identifier[0]];
+      }
+      return fail();
+    };
+    const result = parseExpr();
+    if (index !== source.length || !Number.isFinite(result)) fail();
+    return result * 36;
   }
 
   function readLabel(value) {
@@ -1627,17 +1697,31 @@
 
   // Render `$...$`: sub/superscripts and a few Greek/symbol commands.
   function mathContent(math, source) {
-    const text = math.replace(/\\([A-Za-z]+)/g, (match, name) => {
-      if (Object.prototype.hasOwnProperty.call(mathGreek, name)) return mathGreek[name];
-      if (Object.prototype.hasOwnProperty.call(mathSymbols, name)) return mathSymbols[name];
-      throw new Error(`Unsupported math command in label: ${match}`);
-    });
-    if (!/^(?:[A-Za-z0-9Ωμµ+ .\-−≤≥≠≈∞±∓×·÷°∠]|[\^_](?:\{[A-Za-z0-9]+\}|[A-Za-z0-9]))+$/.test(text)) {
-      throw new Error(`Unsupported math label: ${source}`);
+    // `\overline{X}` becomes an overlined tspan, as in schemdraw's svgtext.
+    // The argument is rendered recursively; other markup inside is allowed.
+    const overline = /\\overline\{([^{}]*)\}/g;
+    let out = '', last = 0, match;
+    const renderSegment = (segment) => {
+      if (segment === '') return '';
+      const text = segment.replace(/\\([A-Za-z]+)/g, (cmd, name) => {
+        if (Object.prototype.hasOwnProperty.call(mathGreek, name)) return mathGreek[name];
+        if (Object.prototype.hasOwnProperty.call(mathSymbols, name)) return mathSymbols[name];
+        throw new Error(`Unsupported math command in label: ${cmd}`);
+      });
+      if (!/^(?:[A-Za-z0-9Ωμµ+ .\-−≤≥≠≈∞±∓×·÷°∠]|[\^_](?:\{[A-Za-z0-9]+\}|[A-Za-z0-9]))+$/.test(text)) {
+        throw new Error(`Unsupported math label: ${source}`);
+      }
+      return escapeText(text)
+        .replace(/([\^_])(?:\{([A-Za-z0-9]+)\}|([A-Za-z0-9]))/g,
+          (_, mark, a, b) => `<tspan baseline-shift="${mark === '^' ? 'super' : 'sub'}" font-size="70%">${a || b}</tspan>`);
+    };
+    while ((match = overline.exec(math))) {
+      out += renderSegment(math.slice(last, match.index));
+      out += `<tspan text-decoration="overline">${renderSegment(match[1])}</tspan>`;
+      last = match.index + match[0].length;
     }
-    return escapeText(text)
-      .replace(/([\^_])(?:\{([A-Za-z0-9]+)\}|([A-Za-z0-9]))/g,
-        (_, mark, a, b) => `<tspan baseline-shift="${mark === '^' ? 'super' : 'sub'}" font-size="70%">${a || b}</tspan>`);
+    out += renderSegment(math.slice(last));
+    return out;
   }
 
   // A label may mix plain text and `$...$` math, and may contain newlines.
@@ -1746,10 +1830,21 @@
       return names[m[1]][m[2]];
     };
     const atPoint = value => {
-      const n = '[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)';
-      const match = new RegExp(`^\\(\\s*(${n})\\s+(${n})\\s*\\)$`).exec(value);
+      // Schemdraw accepts computed coordinates here, e.g. `at((d.unit*2, 0))`.
+      const match = /^\(\s*([^()]+?)\s*\)$/.exec(value);
       if (!match) return point(value);
-      const px = Number(match[1]) * 36, py = -Number(match[2]) * 36;
+      const parts = match[1].trim().split(/\s*,\s*|\s+/).filter(Boolean);
+      if (parts.length !== 2) return point(value);
+      const coordRefs = Object.create(null);
+      for (const [namedTypeName, anchorSet] of Object.entries(names)) {
+        for (const [anchorName, coords] of Object.entries(anchorSet)) {
+          if (!Array.isArray(coords)) continue;
+          coordRefs[`${namedTypeName}.${anchorName}.x`] = coords[0] / 36;
+          coordRefs[`${namedTypeName}.${anchorName}.y`] = -coords[1] / 36;
+        }
+      }
+      const px = readCoordinateExpression(parts[0], unit, coordRefs);
+      const py = -readCoordinateExpression(parts[1], unit, coordRefs);
       if (!Number.isFinite(px) || !Number.isFinite(py)) throw new Error('at coordinates must be finite numbers.');
       return [px, py];
     };
@@ -1821,13 +1916,23 @@
       if (type === 'move' || type === 'move_from') {
         if (name) throw new Error(`${type} cannot have a component name.`);
         const offsets = Object.create(null);
+        // Anchor coordinates referenced from expressions ("A1.out.y") are in
+        // drawing units with y up, as in schemdraw.
+        const coordRefs = Object.create(null);
+        for (const [namedTypeName, anchorSet] of Object.entries(names)) {
+          for (const [anchorName, coords] of Object.entries(anchorSet)) {
+            if (!Array.isArray(coords)) continue;
+            coordRefs[`${namedTypeName}.${anchorName}.x`] = coords[0] / 36;
+            coordRefs[`${namedTypeName}.${anchorName}.y`] = -coords[1] / 36;
+          }
+        }
         for (const { key, value } of args) {
           if (!['dx', 'dy'].includes(key) && !(type === 'move_from' && key === 'at')) throw new Error(`Unsupported argument for ${type}: ${key}`);
           if (Object.prototype.hasOwnProperty.call(offsets, key)) throw new Error(`Duplicate argument: ${key}`);
           if (key === 'at') {
             if (typeof value !== 'string') throw new Error('move_from at must specify a terminal.');
             offsets[key] = value;
-          } else offsets[key] = readMove(value, unit);
+          } else offsets[key] = readCoordinateExpression(value, unit, coordRefs);
         }
         if (type === 'move_from') {
           if (!Object.prototype.hasOwnProperty.call(offsets, 'at')) throw new Error('move_from requires at.');
@@ -3657,13 +3762,14 @@
         || ['BjtNpn2', 'BjtPnp2', 'BjtPnp2c2', 'NMos2', 'PMos2', 'NFet2', 'PFet2', 'JFetN2', 'JFetP2',
           'Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE', 'Rshunt', 'SCR', 'Triac',
           'Battery', 'BatteryCell', 'BatteryDouble', 'SourceI', 'Zener', 'LED', 'Diac'].includes(type);
+      const transistorType = Boolean(componentDefinitions[type] && componentDefinitions[type].transistor);
       if (labels.some(label => !label.items && type !== 'Opamp' && (
         ['start', 'end'].includes(label.loc)
-        || (['base', 'collector', 'emitter'].includes(label.loc) && !(componentDefinitions[type] && componentDefinitions[type].transistor))
+        || (['base', 'collector', 'emitter'].includes(label.loc) && !transistorType)
         || (type === 'Dot' && label.ofst != null && !Array.isArray(label.ofst))
-        || (label.valign != null && !genericLabel)
-        || (label.halign != null && !genericLabel && type !== 'Dot' && !oneTerminalType)
-        || (label.ofst != null && !genericLabel && type !== 'Dot' && !oneTerminalType)
+        || (label.valign != null && !genericLabel && !transistorType)
+        || (label.halign != null && !genericLabel && type !== 'Dot' && !oneTerminalType && !transistorType)
+        || (label.ofst != null && !genericLabel && type !== 'Dot' && !oneTerminalType && !transistorType)
         || (label.rotate !== undefined && !(type === 'Resistor' && (!label.loc || label.loc === 'top')) && !oneTerminalType && !genericLabel)
       ))) throw new Error(`The specified label arguments are not supported for ${type}.`);
       const transistor = Boolean(componentDefinitions[type] && componentDefinitions[type].transistor);
@@ -3927,12 +4033,49 @@
         const labelPoints = definition.anchors;
         // Top/bottom/left/right labels use the element's box on screen, so a
         // rotated transistor still gets its label above or below as drawn.
-        const screenCorners = [[ex1, ey1], [ex1, ey2], [ex2, ey1], [ex2, ey2]].map(corner => transform(corner[0], corner[1]));
+        // Schemdraw uses the glyph's segment bbox (no margin); the enclosing
+        // circle is measured as 0..1.1 units, so the label sits further out
+        // when circle=True.
+        let glyphX1 = Infinity, glyphY1 = Infinity, glyphX2 = -Infinity, glyphY2 = -Infinity;
+        for (const seg of definition.segments) {
+          if (typeof seg.path === 'string') {
+            for (const m of seg.path.matchAll(/(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/g)) {
+              const gx = Number(m[1]), gy = Number(m[2]);
+              glyphX1 = Math.min(glyphX1, gx); glyphX2 = Math.max(glyphX2, gx);
+              glyphY1 = Math.min(glyphY1, gy); glyphY2 = Math.max(glyphY2, gy);
+            }
+          } else if (Array.isArray(seg.circle)) {
+            const [cx, cy, r] = seg.circle;
+            glyphX1 = Math.min(glyphX1, cx - r); glyphX2 = Math.max(glyphX2, cx + r);
+            glyphY1 = Math.min(glyphY1, cy - r); glyphY2 = Math.max(glyphY2, cy + r);
+          }
+        }
+        const hasGlyphBox = Number.isFinite(glyphX1);
+        const labelEx1 = 'circle' in options ? Math.min(hasGlyphBox ? glyphX1 : ex1, 0) : (hasGlyphBox ? glyphX1 : ex1);
+        const labelEx2 = 'circle' in options ? Math.max(hasGlyphBox ? glyphX2 : ex2, 1.1 * 36) : (hasGlyphBox ? glyphX2 : ex2);
+        const labelEy1 = hasGlyphBox ? glyphY1 : ey1;
+        const labelEy2 = hasGlyphBox ? glyphY2 : ey2;
+        const screenCorners = [[labelEx1, labelEy1], [labelEx1, labelEy2], [labelEx2, labelEy1], [labelEx2, labelEy2]].map(corner => transform(corner[0], corner[1]));
         const screenX1 = Math.min(...screenCorners.map(c => c[0])), screenX2 = Math.max(...screenCorners.map(c => c[0]));
         const screenY1 = Math.min(...screenCorners.map(c => c[1])), screenY2 = Math.max(...screenCorners.map(c => c[1]));
+        // Schemdraw's transistor classes set `lblloc`: BJT/MOSFET families use
+        // the right side, JFET/FET families the left, 2-terminal variants the
+        // bottom.
+        const rightDefault = ['Bjt', 'BjtNpn', 'BjtPnp', 'BjtPnp2c', 'NpnSchottky', 'PnpSchottky',
+          'IgbtN', 'IgbtP', 'NpnPhoto', 'PnpPhoto', 'NMos', 'PMos', 'CurrentMirror', 'VoltageMirror'].includes(type);
+        const leftDefault = ['JFet', 'JFetN', 'JFetP', 'Hemt', 'NFet', 'PFet', 'AnalogNFet', 'AnalogPFet', 'AnalogBiasedFet'].includes(type);
+        const transistorDefaultLoc = rightDefault ? 'right' : leftDefault ? 'left' : 'bot';
         for (const label of labels) {
           if (label.items) throw new Error(`${type} does not support list labels.`);
-          const loc = label.loc || 'top';
+          // `ofst` moves the label away from the bbox edge (default lblofst 0.1).
+          const labelOffset = () => {
+            if (label.ofst == null) return 3.6;
+            if (Array.isArray(label.ofst)) throw new Error(`${type} label ofst must be a number.`);
+            if (!Number.isFinite(label.ofst)) throw new Error(`${type} label ofst must be a finite number.`);
+            return label.ofst * 36;
+          };
+          const locI = label.loc || transistorDefaultLoc;
+          const loc = locI;
           let lx, ly, anchor = 'middle', baseline = 'central', screenPlaced = false;
           if (loc !== 'xy' && Object.prototype.hasOwnProperty.call(labelPoints, loc)) {
             [lx, ly] = labelPoints[loc];
@@ -3948,15 +4091,24 @@
               const vx = lx - cx0, vy = ly - cy0, len = Math.hypot(vx, vy) || 1;
               lx += vx / len * 7; ly += vy / len * 7;
             }
-          } else if (loc === 'top') { lx = (screenX1 + screenX2) / 2; ly = screenY1 - 7; baseline = 'ideographic'; screenPlaced = true; }
-          else if (loc === 'bot' || loc === 'bottom') { lx = (screenX1 + screenX2) / 2; ly = screenY2 + 21; baseline = 'hanging'; screenPlaced = true; }
-          else if (loc === 'left') { lx = screenX1 - 7; ly = (screenY1 + screenY2) / 2 + 5; anchor = 'end'; screenPlaced = true; }
-          else if (loc === 'right') { lx = screenX2 + 7; ly = (screenY1 + screenY2) / 2 + 5; anchor = 'start'; screenPlaced = true; }
+          } else if (loc === 'top') { lx = (screenX1 + screenX2) / 2; ly = screenY1 - labelOffset(); baseline = 'ideographic'; screenPlaced = true; }
+          else if (loc === 'bot' || loc === 'bottom') { lx = (screenX1 + screenX2) / 2; ly = screenY2 + labelOffset(); baseline = 'hanging'; screenPlaced = true; }
+          else if (loc === 'left') { lx = screenX1 - labelOffset(); ly = (screenY1 + screenY2) / 2; anchor = 'end'; screenPlaced = true; }
+          else if (loc === 'right') { lx = screenX2 + labelOffset(); ly = (screenY1 + screenY2) / 2; anchor = 'start'; screenPlaced = true; }
           else throw new Error(`Unsupported ${type} label loc: ${loc}`);
           const [tx, ty] = screenPlaced ? [lx, ly] : transform(lx, ly);
-          const width = Math.max(12, Array.from(label.text).length * 10);
-          bounds(tx - (anchor === 'start' ? 0 : anchor === 'end' ? width : width / 2), ty - 18, tx + (anchor === 'end' ? 0 : anchor === 'start' ? width : width / 2), ty + 8);
-          elements.push(`<text x="${tx}" y="${ty}" text-anchor="${anchor}" dominant-baseline="${baseline}"${textFill} font-family="sans-serif" font-size="${labelSize}">${labelContent(label.text)}</text>`);
+          // Multi-line labels follow Schemdraw's text_tosvg layout: y is the
+          // anchor minus (lines+1)/2·size and every tspan advances by `size`.
+          const lines = String(label.text).split('\n');
+          const valign = baseline === ' dominant-baseline="hanging"' ? 'top'
+            : baseline === ' dominant-baseline="central"' ? 'center' : 'bottom';
+          const yAttr = valign === 'center' ? ty - (lines.length + 1) / 2 * labelSize
+            : valign === 'top' ? ty - labelSize
+              : ty - lines.length * labelSize;
+          const spans = lines.map(line => `<tspan x="${tx}" dy="${labelSize}">${labelContent(line)}</tspan>`).join('');
+          const width = Math.max(12, Math.max(...lines.map(line => Array.from(line).length)) * 10);
+          bounds(tx - (anchor === 'start' ? 0 : anchor === 'end' ? width : width / 2), yAttr - labelSize, tx + (anchor === 'end' ? 0 : anchor === 'start' ? width : width / 2), yAttr + (lines.length + 1) * labelSize);
+          elements.push(`<text x="${tx}" y="${yAttr}" text-anchor="${anchor}" dominant-baseline="${baseline}"${textFill} font-family="sans-serif" font-size="${labelSize}">${spans}</text>`);
         }
         if (name) {
           names[name] = anchors;
@@ -4115,10 +4267,10 @@
             else if (loc === 'out' || loc === 'end') { lx += 7; anchor = 'start'; }
             else if (loc === 'c' || loc === 'cbar') { lx += 7; anchor = 'start'; }
             else if (loc === 'start') { lx -= 7; anchor = 'end'; }
-          } else if (loc === 'top') { lx = (ex1 + ex2) / 2; ly = ey1 - 7; baseline = 'ideographic'; }
-          else if (loc === 'bot' || loc === 'bottom') { lx = (ex1 + ex2) / 2; ly = ey2 + 21; baseline = 'hanging'; }
-          else if (loc === 'left') { lx = ex1 - 7; ly = (ey1 + ey2) / 2 + 5; anchor = 'end'; }
-          else if (loc === 'right') { lx = ex2 + 7; ly = (ey1 + ey2) / 2 + 5; anchor = 'start'; }
+          } else if (loc === 'top') { lx = (ex1 + ex2) / 2; ly = ey1 + 2 - 3.6; baseline = 'ideographic'; }
+          else if (loc === 'bot' || loc === 'bottom') { lx = (ex1 + ex2) / 2; ly = ey2 - 2 + 3.6; baseline = 'hanging'; }
+          else if (loc === 'left') { lx = ex1 + 2 - 3.6; ly = 0; anchor = 'end'; }
+          else if (loc === 'right') { lx = ex2 - 2 + 3.6; ly = 0; anchor = 'start'; }
           else throw new Error(`Unsupported ${type} label loc: ${loc}`);
           const [tx, ty] = placed.transform(lx, ly);
           const width = Math.max(12, Array.from(label.text).length * 10);

@@ -10,6 +10,9 @@
     textarea, pre, #output { width: 100%; border: 1px solid #ddd; border-radius: 4px; background: #fff; }
     textarea { min-height: 266px; padding: 12px; font: 14px/20px monospace; resize: vertical; }
     button { margin: 12px 0; padding: 8px 20px; cursor: pointer; }
+    .toolbar { display: flex; align-items: center; gap: 8px; margin: 12px 0; }
+    .toolbar button { margin: 0; }
+    #download { margin-left: auto; }
     #output { min-height: 180px; padding: 16px; display: grid; place-items: center; }
     #output > svg { width: 100%; max-width: 480px; max-height: 240px; }
     pre { min-height: 100px; padding: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -30,8 +33,11 @@
   Line: toy="op.out" dot
   Line: right="d.unit/4" at="op.out" label="'$v_{o}$' loc='right'"
 }</textarea>
-  <button id="clear" type="button">Clear</button>
-  <button id="render" type="button">Render</button>
+  <div class="toolbar">
+    <button id="clear" type="button">Clear</button>
+    <button id="render" type="button">Render</button>
+    <button id="download" type="button">Download as SVG</button>
+  </div>
   <div id="output" aria-label="SVG output area"></div>
   <pre id="log" aria-label="Processing log" aria-live="polite"></pre>
   <script src="fleming.js"></script>
@@ -54,6 +60,30 @@
       } catch (error) {
         report('Error: ' + error.message);
       }
+    });
+    // Timestamp for the download name: YYYYMMDD-HHMMSS (local time).
+    const timestamp = () => {
+      const now = new Date();
+      const pad = value => String(value).padStart(2, '0');
+      return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    };
+    document.getElementById('download').addEventListener('click', () => {
+      const log = document.getElementById('log');
+      const svg = document.querySelector('#output svg');
+      if (!svg) {
+        log.textContent += 'Error: render a circuit before downloading.\n';
+        return;
+      }
+      const markup = '<?xml version="1.0" encoding="UTF-8"?>\n'
+        + new XMLSerializer().serializeToString(svg);
+      const url = URL.createObjectURL(new Blob([markup], { type: 'image/svg+xml;charset=utf-8' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${timestamp()}.svg`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
     });
   </script>
 </body>

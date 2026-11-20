@@ -1423,25 +1423,136 @@
     const double = (raw.match(/"/g) || []).length;
     const single = (raw.match(/'/g) || []).length;
     if (double % 2 || single % 2) return true;
-    if (/^(?:at|anchor|drop|theta|color|length|shift|label|to|tox|toy|endpoints)\s*=/.test(line)) return true;
-    if (/^(?:left|right|up|down|hold|dot|idot|flip|reverse)$/.test(line)) return true;
+    // Any argument-looking line (key=value or a bare flag such as `right`)
+    // after a component without a trailing comma.
+    if (/^[A-Za-z_]\w*\s*=/.test(line)) return true;
+    if (/^[a-z_]\w*$/.test(line)) return true;
     return false;
+  }
+
+  // Walk a physical line outside quotes, tracking escapes and bracket depth.
+  // `visit(char, index, depth)` is called for every character outside quotes.
+  function scanFlemingLine(text, visit) {
+    let quote = null, escaped = false, depth = 0;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (quote !== null) {
+        if (escaped) escaped = false;
+        else if (ch === '\\') escaped = true;
+        else if (ch === quote) quote = null;
+        continue;
+      }
+      if (ch === '"') { quote = ch; continue; }
+      if (ch === '[' || ch === '(') { depth++; visit && visit(ch, i, depth); continue; }
+      if (ch === ']' || ch === ')') { depth = Math.max(0, depth - 1); visit && visit(ch, i, depth); continue; }
+      visit && visit(ch, i, depth);
+    }
+    return { quote, depth };
+  }
+
+  // Index of a comma that ends the line at bracket depth 0, or -1.
+  function trailingTopLevelComma(text) {
+    let last = null;
+    let lastIndex = -1;
+    const { quote } = scanFlemingLine(text, (ch, index, depth) => {
+      if (!/\s/.test(ch)) { last = { ch, depth }; lastIndex = index; }
+    });
+    if (quote !== null) return -1;
+    return last && last.ch === ',' && last.depth === 0 ? lastIndex : -1;
+  }
+
+  function stripCharacters(text, index, count = 1) {
+    return (text.slice(0, index) + text.slice(index + count)).trimEnd();
+  }
+
+  // A physical line after a continuation comma must be an argument line, not
+  // a new component, block, directive, or closing brace.
+  function isContinuationBoundary(text) {
+    return text === '}' ||
+      text.startsWith('@') ||
+      /^circuit\s*\{$/.test(text) ||
+      /^[A-Za-z_]\w*\s*\{$/.test(text) ||
+      /^[A-Za-z_]\w*\s*:/.test(text);
+  }
+
+  // Combine physical lines while they end with a top-level comma. Comments and
+  // blank lines are skipped while a continuation is open. A trailing comma
+  // before '}' is accepted as the final comma and removed.
+  function buildLogicalLines(physical) {
+    const result = [];
+    for (let i = 0; i < physical.length; i++) {
+      const start = physical[i];
+      if (!start.text || start.text.startsWith('#')) { result.push(start); continue; }
+      let text = start.text;
+      let endNumber = start.number;
+      let comma = trailingTopLevelComma(text);
+      while (comma >= 0) {
+        const colon = text.indexOf(':');
+        if (colon < 0 || !text.slice(colon + 1, comma).trim()) {
+          throw new Error(`Line ${start.number}: a comma needs an argument before it.`);
+        }
+        let next = null;
+        for (let j = i + 1; j < physical.length; j++) {
+          if (physical[j].text && !physical[j].text.startsWith('#')) { next = { ...physical[j], index: j }; break; }
+        }
+        if (!next) throw new Error(`Line ${endNumber}: comma at the end of a line has no continuation.`);
+        if (next.text === '}') { text = stripCharacters(text, comma); break; }
+        if (next.text.startsWith(',')) throw new Error(`Line ${next.number}: a continuation line cannot start with a comma.`);
+        if (isContinuationBoundary(next.text)) {
+          throw new Error(`Line ${endNumber}: a comma at the end of a line is only allowed before '}' or when the next line contains arguments.`);
+        }
+        text = `${stripCharacters(text, comma)} ${next.text}`;
+        endNumber = next.number;
+        i = next.index;
+        comma = trailingTopLevelComma(text);
+      }
+      result.push({ text, number: start.number, endNumber });
+    }
+    return result;
+  }
+
+  // Replace top-level commas with spaces and reject empty arguments
+  // (`Type:,`, `right,,`, leading commas). Commas inside quotes or brackets
+  // are left for the value parsers, which report a specific error.
+  function normalizeArguments(input, label) {
+    let out = '', segment = '', quote = null, escaped = false, depth = 0, hadComma = false;
+    const flush = () => {
+      if (!segment.trim()) throw new Error(`Line ${label}: empty argument around a comma.`);
+      segment = '';
+    };
+    for (const ch of input) {
+      if (quote !== null) {
+        out += ch; segment += ch;
+        if (escaped) escaped = false;
+        else if (ch === '\\') escaped = true;
+        else if (ch === quote) quote = null;
+        continue;
+      }
+      if (ch === '"') { quote = ch; out += ch; segment += ch; continue; }
+      if (ch === '[' || ch === '(') { depth++; out += ch; segment += ch; continue; }
+      if (ch === ']' || ch === ')') { depth = Math.max(0, depth - 1); out += ch; segment += ch; continue; }
+      if (ch === ',' && depth === 0) { flush(); hadComma = true; out += ' '; continue; }
+      out += ch; segment += ch;
+    }
+    if (hadComma) flush();
+    return out;
   }
 
   function parse(source, subs = null) {
     if (typeof source !== 'string') throw new TypeError('source must be a string.');
-    // One part per line: arguments are whitespace-separated and a component
-    // is not continued across lines. Line numbers are kept so that an
-    // accidental line break can be reported against the source line.
-    const lines = source.split(/\r?\n/).map((s, i) => ({ text: s.trim(), number: i + 1 }))
+    // Physical lines are joined into logical lines while they end with a
+    // top-level comma. A component still occupies exactly one logical line.
+    const logical = buildLogicalLines(source.split(/\r?\n/).map((s, i) => ({ text: s.trim(), number: i + 1 })))
       .filter(s => s.text && !s.text.startsWith('#'));
-    if (!/^circuit\s*\{$/.test(lines.shift()?.text || '')) throw new Error('Specify exactly one circuit { ... } block.');
-    const breakError = (number, detail) =>
-      new Error(`Line ${number}: line break error. ${detail}Write each component on one line.`);
+    if (!/^circuit\s*\{$/.test(logical.shift()?.text || '')) throw new Error('Specify exactly one circuit { ... } block.');
+    const breakError = (label, detail) =>
+      new Error(`Line ${label}: line break error. ${detail}`);
     const records = [], frames = [];
-    let closed = false, previousNumber = 0;
-    for (const { text: line, number } of lines) {
+    let closed = false, previousLabel = null;
+    for (const { text: line, number, endNumber } of logical) {
+      const lineLabel = number === endNumber ? String(number) : `${number}–${endNumber}`;
       if (closed) throw new Error('Unexpected input after the circuit block.');
+      if (line.startsWith(',')) throw new Error(`Line ${lineLabel}: a line cannot start with a comma.`);
       if (line === '}') {
         const frame = frames.pop();
         if (!frame) closed = true;
@@ -1465,12 +1576,11 @@
         // Text that belongs to a previous component's argument list was split
         // off by a line break, e.g. `label="'x'` / `loc='bot'"` or a bare `left`
         // on its own line after `and: at="A.out"`.
-        if (breakErrorSignal(line)) throw breakError(number, `This line looks like a continuation of the previous component (line ${previousNumber}). `);
-        if (line.startsWith(';')) throw new Error(`Line ${number}: syntax error. \`;\` is not used in fleming notation; separate arguments with whitespace.`);
-        throw new Error(`Cannot parse component declaration: ${line}`);
+        if (breakErrorSignal(line)) throw breakError(lineLabel, `This line looks like a continuation of the previous component${previousLabel ? ` (line ${previousLabel})` : ''}. Add a comma at the end of the previous line to continue it.`);
+        if (line.startsWith(';')) throw new Error(`Line ${lineLabel}: syntax error. \`;\` is not used in fleming notation; separate arguments with whitespace or commas.`);
+        throw new Error(`Line ${lineLabel}: cannot parse component declaration: ${line}`);
       }
-      previousNumber = number;
-      const args = [], input = match[2];
+      const args = [], input = normalizeArguments(match[2], lineLabel);
       // Bare values end at whitespace, except inside brackets or parentheses,
       // so list values such as inputnots=[1 3] keep their inner spaces.
       const token = /\s*([A-Za-z_]\w*)(?:\s*=\s*(?:"((?:\\\\|\\"|[^"\\\r\n]|\\(?!["\\]))*)"|(\[[^\[\]\r\n]*\]|\([^()\r\n]*\)|[^\s]+)))?/gy;
@@ -1479,8 +1589,8 @@
         if (!m || token.lastIndex === at) {
           const rest = input.slice(at).trim();
           // `;` is not part of the grammar: fleming has no statement terminator.
-          if (rest.startsWith(';')) throw new Error(`Line ${number}: syntax error. \`;\` is not used in fleming notation; separate arguments with whitespace.`);
-          throw new Error(`Cannot parse arguments: ${rest}`);
+          if (rest.startsWith(';')) throw new Error(`Line ${lineLabel}: syntax error. \`;\` is not used in fleming notation; separate arguments with whitespace or commas.`);
+          throw new Error(`Line ${lineLabel}: cannot parse arguments: ${rest}`);
         }
         let value = m[2];
         if (value === undefined) {
@@ -1511,6 +1621,7 @@
       if (namedFrame) namedFrame.count++;
       const sub = Boolean(subs && Object.prototype.hasOwnProperty.call(subs, match[1]));
       records.push({ type: match[1], name: namedFrame ? namedFrame.name : null, args, sub });
+      previousLabel = lineLabel;
     }
     if (!closed || frames.length) throw new Error('Missing closing brace for a block.');
     if (!records.some(record => !record.type.startsWith('__hold_') && !['config', 'move', 'move_from', 'print'].includes(record.type))) throw new Error('Specify at least one component.');
@@ -1523,8 +1634,21 @@
       if (!Number.isFinite(result) || result <= 0) throw new Error(`Invalid length: ${value}`);
       return result;
     }
-    // Schemdraw expressions such as `d.unit/4`, `d.unit*2`, or `d.unit/2*3`.
-    const m = /^d\.unit(?:\s*([*/])\s*(\d*\.?\d+))?(?:\s*([*/])\s*(\d*\.?\d+))?$/.exec(value || '');
+    // Schemdraw expressions such as `d.unit/4`, `d.unit*2`, `d.unit/2*3`,
+    // `1.5*d.unit`, or `d.unit+.6`.
+    const text = (value || '').replace(/\s+/g, '');
+    const check = result => {
+      if (!Number.isFinite(result) || result <= 0) throw new Error(`Unsupported length expression: ${value}`);
+      return result;
+    };
+    const scaled = /^(\d*\.?\d+)\*d\.unit$/.exec(text);
+    if (scaled) return check(Number(scaled[1]) * unit);
+    const offset = /^d\.unit([+-])(\d*\.?\d+)$/.exec(text);
+    if (offset) {
+      const delta = Number(offset[2]) * 36;
+      return check(offset[1] === '+' ? unit + delta : unit - delta);
+    }
+    const m = /^d\.unit(?:([*/])(\d*\.?\d+))?(?:([*/])(\d*\.?\d+))?$/.exec(text);
     if (!m) throw new Error(`Unsupported length expression: ${value}`);
     let result = unit;
     for (const [op, raw] of [[m[1], m[2]], [m[3], m[4]]]) {
@@ -1533,8 +1657,7 @@
       if (!Number.isFinite(n) || n <= 0) throw new Error(`Unsupported length expression: ${value}`);
       result = op === '/' ? result / n : result * n;
     }
-    if (!Number.isFinite(result) || result <= 0) throw new Error(`Unsupported length expression: ${value}`);
-    return result;
+    return check(result);
   }
 
   // Drawing.move uses signed drawing-unit offsets, not SVG coordinates.
@@ -1619,7 +1742,7 @@
         rest = rest.slice(match[0].length);
         if (rest.startsWith(']')) break;
         const separator = /^\s+/.exec(rest);
-        if (!separator) throw new Error(`List label entries must be separated by whitespace: ${value}`);
+        if (!separator) throw new Error(`List label entries must be separated by whitespace, not commas: ${value}`);
         rest = rest.slice(separator[0].length);
       }
       if (!items.length || !rest.startsWith(']')) throw new Error(`Invalid list label: ${value}`);
@@ -1644,6 +1767,7 @@
       if (!rest) {
         break;
       }
+      if (/^ofst\s*=\s*\([^)]*,/.test(rest)) throw new Error(`Invalid label offset: separate x and y with whitespace, not a comma: ${value}`);
       const arg = /^(loc|halign|valign|color)\s*=\s*'([\w#]+)'|^(ofst)\s*=\s*\(\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s+([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*\)|^(ofst|rotate|fontsize)\s*=\s*(True|False|[+-]?(?:\d+(?:\.\d*)?|\.\d+))/.exec(rest);
       if (!arg) throw new Error(`Invalid label argument: ${value}`);
       const key = arg[1] || arg[3] || arg[6];
@@ -1944,7 +2068,7 @@
         continue;
       }
       const previousState = [x, y, direction];
-      if (!record.sub && !['Resistor', 'ResistorIEEE', 'ResistorIEC', 'ResistorVar', 'ResistorVarIEC', 'ResistorVarIEEE', 'Capacitor', 'Capacitor2', 'Inductor', 'Inductor2', 'CPE', 'Nullator', 'Norator', 'Diode', 'DiodeTunnel', 'DiodeTVS', 'DiodeShockley', 'Josephson', 'Zener', 'LED', 'Diac', 'Schottky', 'Varactor', 'Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE', 'Rshunt', 'SCR', 'Triac', 'Fuse', 'FuseIEC', 'FuseIEEE', 'RBox', 'Thermistor', 'Crystal', 'CapacitorVar', 'CapacitorTrim', 'Photoresistor', 'PhotoresistorBox', 'PhotoresistorIEC', 'PhotoresistorIEEE', 'Coax', 'Triax', 'Motor', 'BusLine', 'DataBusLine', 'BusConnect', 'CoaxConnect', 'Plug', 'Jack', 'Terminal', 'Jumper', 'DE9', 'DB25', 'DA15', 'DC37', 'DD50', 'Switch', 'Button', 'SwitchSpdt', 'SwitchSpdt2', 'SwitchDpst', 'SwitchDpdt', 'SwitchRotary', 'SwitchDIP', 'SwitchReed', 'Battery', 'BatteryCell', 'BatteryDouble', 'Line', 'Wire', 'Dot', 'Source', 'SourceSin', 'SourceV', 'SourceI', 'SourcePulse', 'SourceSquare', 'SourceTriangle', 'SourceRamp', 'Lamp', 'Lamp2', 'Solar', 'Neon', 'Photodiode', 'LED2', 'FuseUS', 'Memristor', 'Memristor2', 'SparkGap', 'MeterV', 'MeterA', 'MeterI', 'MeterOhm', 'MeterArrow', 'SourceControlled', 'SourceControlledV', 'SourceControlledI', 'Gap', 'Breaker', 'Optocoupler', 'Relay', 'Opamp', 'Ground', 'GroundSignal', 'GroundChassis', 'Vdd', 'Vss', 'NoConnect', 'Antenna', 'AntennaLoop', 'AntennaLoop2', 'Speaker', 'Mic', 'AudioJack', "OutletA","OutletB","OutletC","OutletD","OutletE","OutletF","OutletG","OutletH","OutletI","OutletJ","OutletK","OutletL", 'Arrowhead', 'DotDotDot', 'Label', 'Tag', 'Bjt', 'JFet', 'Hemt', 'NpnSchottky', 'PnpSchottky', 'BjtNpn', 'BjtPnp', 'BjtPnp2c', 'BjtNpn2', 'BjtPnp2', 'BjtPnp2c2', 'IgbtN', 'IgbtP', 'NpnPhoto', 'PnpPhoto', 'AnalogNFet', 'AnalogPFet', 'AnalogBiasedFet', 'NMos2', 'PMos2', 'NFet2', 'PFet2', 'JFetN2', 'JFetP2', 'JFetN', 'JFetP', 'NFet', 'PFet', 'NMos', 'PMos', 'CurrentMirror', 'VoltageMirror', 'Ic', 'Multiplexer', 'VoltageRegulator', 'DFlipFlop', 'JKFlipFlop', 'Ic555', 'SevenSegment', 'MeterBox', 'MeterAnalog', 'MeterDigital', 'Oscilloscope', 'IcDIP', 'Header', 'Transformer', 'LoopCurrent', 'CurrentLabel', 'CurrentLabelInline', 'Rectifier', 'Triode', 'DualVacuumTube', 'Nullor', 'VoltageTransactor', 'TransimpedanceTransactor', 'CurrentTransactor', 'TransadmittanceTransactor', ...logicGateTypes].includes(type)) throw new Error(`Unsupported component: ${type}`);
+      if (!record.sub && !['Resistor', 'ResistorIEEE', 'ResistorIEC', 'ResistorVar', 'ResistorVarIEC', 'ResistorVarIEEE', 'Capacitor', 'Capacitor2', 'Inductor', 'Inductor2', 'CPE', 'Nullator', 'Norator', 'Diode', 'DiodeTunnel', 'DiodeTVS', 'DiodeShockley', 'Josephson', 'Zener', 'LED', 'Diac', 'Schottky', 'Varactor', 'Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE', 'Rshunt', 'SCR', 'Triac', 'Fuse', 'FuseIEC', 'FuseIEEE', 'RBox', 'Thermistor', 'Crystal', 'CapacitorVar', 'CapacitorTrim', 'Photoresistor', 'PhotoresistorBox', 'PhotoresistorIEC', 'PhotoresistorIEEE', 'Coax', 'Triax', 'Motor', 'BusLine', 'DataBusLine', 'BusConnect', 'CoaxConnect', 'Plug', 'Jack', 'Terminal', 'Jumper', 'DE9', 'DB25', 'DA15', 'DC37', 'DD50', 'Switch', 'Button', 'SwitchSpdt', 'SwitchSpdt2', 'SwitchDpst', 'SwitchDpdt', 'SwitchRotary', 'SwitchDIP', 'SwitchReed', 'Battery', 'BatteryCell', 'BatteryDouble', 'Line', 'Wire', 'OrthoLines', 'Dot', 'Source', 'SourceSin', 'SourceV', 'SourceI', 'SourcePulse', 'SourceSquare', 'SourceTriangle', 'SourceRamp', 'Lamp', 'Lamp2', 'Solar', 'Neon', 'Photodiode', 'LED2', 'FuseUS', 'Memristor', 'Memristor2', 'SparkGap', 'MeterV', 'MeterA', 'MeterI', 'MeterOhm', 'MeterArrow', 'SourceControlled', 'SourceControlledV', 'SourceControlledI', 'Gap', 'Breaker', 'Optocoupler', 'Relay', 'Opamp', 'Ground', 'GroundSignal', 'GroundChassis', 'Vdd', 'Vss', 'NoConnect', 'Antenna', 'AntennaLoop', 'AntennaLoop2', 'Speaker', 'Mic', 'AudioJack', "OutletA","OutletB","OutletC","OutletD","OutletE","OutletF","OutletG","OutletH","OutletI","OutletJ","OutletK","OutletL", 'Arrowhead', 'DotDotDot', 'Label', 'Tag', 'Bjt', 'JFet', 'Hemt', 'NpnSchottky', 'PnpSchottky', 'BjtNpn', 'BjtPnp', 'BjtPnp2c', 'BjtNpn2', 'BjtPnp2', 'BjtPnp2c2', 'IgbtN', 'IgbtP', 'NpnPhoto', 'PnpPhoto', 'AnalogNFet', 'AnalogPFet', 'AnalogBiasedFet', 'NMos2', 'PMos2', 'NFet2', 'PFet2', 'JFetN2', 'JFetP2', 'JFetN', 'JFetP', 'NFet', 'PFet', 'NMos', 'PMos', 'CurrentMirror', 'VoltageMirror', 'Ic', 'Multiplexer', 'VoltageRegulator', 'DFlipFlop', 'JKFlipFlop', 'Ic555', 'SevenSegment', 'MeterBox', 'MeterAnalog', 'MeterDigital', 'Oscilloscope', 'IcDIP', 'Header', 'Transformer', 'LoopCurrent', 'CurrentLabel', 'CurrentLabelInline', 'Rectifier', 'Triode', 'DualVacuumTube', 'Nullor', 'VoltageTransactor', 'TransimpedanceTransactor', 'CurrentTransactor', 'TransadmittanceTransactor', ...logicGateTypes].includes(type)) throw new Error(`Unsupported component: ${type}`);
       const isMeter = ['MeterBox', 'MeterAnalog', 'MeterDigital', 'Oscilloscope'].includes(type);
       const isSource = ['Source', 'SourceV', 'SourceSin', 'SourceI', 'SourcePulse', 'SourceSquare', 'SourceTriangle', 'SourceRamp', 'Lamp', 'Lamp2', 'Solar', 'Neon', 'MeterV', 'MeterA', 'MeterI', 'MeterOhm', 'MeterArrow', 'SourceControlled', 'SourceControlledV', 'SourceControlledI', 'Solar', 'Neon'].includes(type);
       if (name && Object.prototype.hasOwnProperty.call(names, name)) throw new Error(`Duplicate component name: ${name}`);
@@ -1959,8 +2083,12 @@
         else if (key === 'pin') {
           if (!options.pin) options.pin = [];
           options.pin.push(value);
+        } else if (key === 'side') {
+          if (typeof value !== 'string') throw new Error('side requires a value like "L spacing=1.5 pad=1.5".');
+          if (!options.side) options.side = [];
+          options.side.push(value);
         } else {
-          if (!record.sub && !['at', 'to', 'tox', 'toy', 'endpoints', 'anchor', 'theta', 'color', 'drop', 'shift', 'scale', 'tap_length', 'idot', 'dot', 'leads', 'lead', 'hold', 'flip', 'reverse', 'length', 'shape', 'k', 'arrow', 'delta', 'dx', 'dy', 'size', 'pin', 'preclr', 'preclrinvert', 'slant', 'pinspacing', 'demux', 'decimal', 'digit', 'segcolor', 'tilt', 'labelsegments', 'anode', 'cathode', 'needle_percent', 'window_fill', 'input_fill', 'signal', 'signal_color', 'signal_lw', 'grid', ...(['IcDIP', 'Header', 'Transformer'].includes(type) ? ['pins', 'notch', 'width', 'pinw', 'spacing', 'number', 'pfontsize', 'rows', 'cols', 'style', 'numbering', 'shownumber', 'pinspacing', 'edge', 'pinfill', 't1', 't2', 'core', 'loop', 'align', 'pinsleft', 'pinsright', 'pinalignleft', 'pinalignright', 'pinfontsizeleft', 'pinfontsizeright'] : []), ...(['NFet2', 'PFet2', 'NFet', 'PFet'].includes(type) ? ['bulk'] : []), ...(['JFetN2', 'JFetP2'].includes(type) ? ['circle'] : []), ...(['AnalogNFet', 'AnalogPFet', 'AnalogBiasedFet'].includes(type) ? ['bulk', 'offset_gate', 'source_arrow'] : []), ...(type === 'Breaker' ? ['dots'] : []), ...(type === 'Optocoupler' ? ['box', 'boxfill', 'boxpad', 'base'] : []), ...(type === 'Relay' ? ['switch', 'core', 'link', 'box', 'boxfill', 'boxpad', 'swreverse', 'swflip', 'unit', 'cycl'] : []), ...(type === 'Inductor2' ? ['loops', 'core'] : []), ...(type === 'Capacitor2' ? ['polar'] : []), ...(type === 'Josephson' ? ['box'] : []), ...(type === 'Coax' ? ['radius', 'leadlen'] : []), ...(type === 'Triax' ? ['radiusinner', 'radiusouter', 'leadlen', 'shieldofststart', 'shieldofstend'] : []), ...(type === 'BusLine' ? ['lw'] : []), ...(type === 'BusConnect' ? ['n', 'slant_up', 'dy', 'lwbus', 'l'] : []), ...(type === 'CoaxConnect' ? ['radius', 'radiusinner', 'fillinner'] : []), ...(type === 'Terminal' ? ['r', 'open'] : []), ...(type === 'Jumper' ? ['pinspacing'] : []), ...(['DE9', 'DB25', 'DA15', 'DC37', 'DD50'].includes(type) ? ['pinspacing', 'edge', 'number', 'pinfill'] : []), ...(['MeterBox', 'MeterAnalog', 'MeterDigital', 'Oscilloscope'].includes(type) ? ['width', 'corner', 'inputs', 'input_ofst', 'input_lw', 'input_rad'] : []), ...(type === 'MeterAnalog' ? ['needle_color', 'needle_width'] : []), ...(['MeterDigital', 'Oscilloscope'].includes(type) ? ['screen_fill', 'screen_lw'] : []), ...(type === 'Oscilloscope' ? ['grid_color', 'grid_lw'] : []), ...(logicMultiInputTypes.has(type) ? ['inputs', 'inputnots', 'leadin', 'leadout'] : []), ...(type === 'Tristate' ? ['outputnot', 'controlnot'] : []), ...(type === 'Capacitor' ? ['polar'] : []), ...(type === 'Inductor' ? ['core'] : []), ...(['Diode', 'LED'].includes(type) ? ['fill'] : []), ...(type === 'Dot' ? ['open'] : []), ...(type === 'Opamp' ? ['sign'] : []), ...(type === 'Button' ? ['nc', 'contacts'] : []), ...(['NMos', 'PMos', 'NMos2', 'PMos2'].includes(type) ? ['diode'] : []), ...(['NFet', 'PFet'].includes(type) ? ['bulk'] : []), ...(['Switch', 'SwitchSpdt', 'SwitchSpdt2'].includes(type) ? ['contacts', 'nc', 'action'] : []), ...(type === 'SwitchRotary' ? ['n', 'dtheta', 'theta0', 'radius', 'arrowlen', 'arrowcontact'] : []), ...(type === 'SwitchDIP' ? ['n', 'pattern', 'switchcolor', 'swidth', 'spacing'] : []), ...(['SwitchDpst', 'SwitchDpdt'].includes(type) ? ['contacts', 'link'] : []), ...(['Bjt', 'JFet', 'NpnSchottky', 'PnpSchottky', 'BjtNpn', 'BjtPnp', 'BjtPnp2c', 'JFetN', 'JFetP', 'NMos', 'PMos', 'NMos2', 'PMos2'].includes(type) ? ['circle'] : []), ...(type === 'Hemt' ? ['split', 'source_arrow'] : []), ...(type === 'AudioJack' ? ['ring', 'switch', 'ringswitch', 'dots', 'open', 'radius'] : []), ...(/^Outlet[A-L]$/.test(type) ? ['plug'] : []), ...(type === 'Arrowhead' ? ['headwidth', 'headlength'] : []), ...(type === 'DotDotDot' ? ['radius', 'open'] : []), ...(type === 'Tag' ? ['width', 'height'] : []), ...(type === 'Arrow' ? ['double'] : []), ...(type === 'LoopCurrent' ? ['elms', 'pad', 'direction', 'theta1', 'theta2'] : []), ...(type === 'CurrentLabel' ? ['top', 'ofst', 'headlength', 'headwidth'] : []), ...(type === 'CurrentLabelInline' ? ['direction', 'start', 'ofst', 'headlength', 'headwidth'] : []), ...(['Nullor', 'VoltageTransactor', 'TransimpedanceTransactor', 'CurrentTransactor', 'TransadmittanceTransactor'].includes(type) ? ['reverse_output'] : []), ...(type === 'Triode' ? ['heater', 'split'] : []), ...(type === 'DualVacuumTube' ? ['grids_left', 'grids_right', 'heater', 'cathode', 'anodetype'] : [])].includes(key)) throw new Error(`Unsupported argument: ${key}`);
+          if (!record.sub && !['at', 'to', 'tox', 'toy', 'endpoints', 'anchor', 'theta', 'color', 'drop', 'shift', 'scale', 'tap_length', 'idot', 'dot', 'leads', 'lead', 'hold', 'flip', 'reverse', 'length', 'shape', 'k', 'arrow', 'delta', 'dx', 'dy', 'size', 'pin', 'side', 'preclr', 'preclrinvert', 'slant', 'pinspacing', 'demux', 'decimal', 'digit', 'segcolor', 'tilt', 'labelsegments', 'anode', 'cathode', 'needle_percent', 'window_fill', 'input_fill', 'signal', 'signal_color', 'signal_lw', 'grid', ...(['IcDIP', 'Header', 'Transformer'].includes(type) ? ['pins', 'notch', 'width', 'pinw', 'spacing', 'number', 'pfontsize', 'rows', 'cols', 'style', 'numbering', 'shownumber', 'pinspacing', 'edge', 'pinfill', 't1', 't2', 'core', 'loop', 'align', 'pinsleft', 'pinsright', 'pinalignleft', 'pinalignright', 'pinfontsizeleft', 'pinfontsizeright'] : []), ...(['NFet2', 'PFet2', 'NFet', 'PFet'].includes(type) ? ['bulk'] : []), ...(['JFetN2', 'JFetP2'].includes(type) ? ['circle'] : []), ...(['AnalogNFet', 'AnalogPFet', 'AnalogBiasedFet'].includes(type) ? ['bulk', 'offset_gate', 'source_arrow'] : []), ...(type === 'Breaker' ? ['dots'] : []), ...(type === 'Optocoupler' ? ['box', 'boxfill', 'boxpad', 'base'] : []), ...(type === 'Relay' ? ['switch', 'core', 'link', 'box', 'boxfill', 'boxpad', 'swreverse', 'swflip', 'unit', 'cycl'] : []), ...(type === 'Inductor2' ? ['loops', 'core'] : []), ...(type === 'Capacitor2' ? ['polar'] : []), ...(type === 'Josephson' ? ['box'] : []), ...(type === 'Coax' ? ['radius', 'leadlen'] : []), ...(type === 'Triax' ? ['radiusinner', 'radiusouter', 'leadlen', 'shieldofststart', 'shieldofstend'] : []), ...(type === 'BusLine' ? ['lw'] : []), ...(type === 'BusConnect' ? ['n', 'slant_up', 'dy', 'lwbus', 'l'] : []), ...(type === 'CoaxConnect' ? ['radius', 'radiusinner', 'fillinner'] : []), ...(type === 'Terminal' ? ['r', 'open'] : []), ...(type === 'Jumper' ? ['pinspacing'] : []), ...(['DE9', 'DB25', 'DA15', 'DC37', 'DD50'].includes(type) ? ['pinspacing', 'edge', 'number', 'pinfill'] : []), ...(['MeterBox', 'MeterAnalog', 'MeterDigital', 'Oscilloscope'].includes(type) ? ['width', 'corner', 'inputs', 'input_ofst', 'input_lw', 'input_rad'] : []), ...(type === 'MeterAnalog' ? ['needle_color', 'needle_width'] : []), ...(['MeterDigital', 'Oscilloscope'].includes(type) ? ['screen_fill', 'screen_lw'] : []), ...(type === 'Oscilloscope' ? ['grid_color', 'grid_lw'] : []), ...(logicMultiInputTypes.has(type) ? ['inputs', 'inputnots', 'leadin', 'leadout'] : []), ...(type === 'Tristate' ? ['outputnot', 'controlnot'] : []), ...(type === 'Ic' ? ['plblofst', 'botlabel'] : []), ...(type === 'OrthoLines' ? ['n', 'dy', 'xstart'] : []), ...(type === 'Capacitor' ? ['polar'] : []), ...(type === 'Inductor' ? ['core'] : []), ...(['Diode', 'LED'].includes(type) ? ['fill'] : []), ...(type === 'Dot' ? ['open'] : []), ...(type === 'Opamp' ? ['sign'] : []), ...(type === 'Button' ? ['nc', 'contacts'] : []), ...(['NMos', 'PMos', 'NMos2', 'PMos2'].includes(type) ? ['diode'] : []), ...(['NFet', 'PFet'].includes(type) ? ['bulk'] : []), ...(['Switch', 'SwitchSpdt', 'SwitchSpdt2'].includes(type) ? ['contacts', 'nc', 'action'] : []), ...(type === 'SwitchRotary' ? ['n', 'dtheta', 'theta0', 'radius', 'arrowlen', 'arrowcontact'] : []), ...(type === 'SwitchDIP' ? ['n', 'pattern', 'switchcolor', 'swidth', 'spacing'] : []), ...(['SwitchDpst', 'SwitchDpdt'].includes(type) ? ['contacts', 'link'] : []), ...(['Bjt', 'JFet', 'NpnSchottky', 'PnpSchottky', 'BjtNpn', 'BjtPnp', 'BjtPnp2c', 'JFetN', 'JFetP', 'NMos', 'PMos', 'NMos2', 'PMos2'].includes(type) ? ['circle'] : []), ...(type === 'Hemt' ? ['split', 'source_arrow'] : []), ...(type === 'AudioJack' ? ['ring', 'switch', 'ringswitch', 'dots', 'open', 'radius'] : []), ...(/^Outlet[A-L]$/.test(type) ? ['plug'] : []), ...(type === 'Arrowhead' ? ['headwidth', 'headlength'] : []), ...(type === 'DotDotDot' ? ['radius', 'open'] : []), ...(type === 'Tag' ? ['width', 'height'] : []), ...(type === 'Arrow' ? ['double'] : []), ...(type === 'LoopCurrent' ? ['elms', 'pad', 'direction', 'theta1', 'theta2'] : []), ...(type === 'CurrentLabel' ? ['top', 'ofst', 'headlength', 'headwidth'] : []), ...(type === 'CurrentLabelInline' ? ['direction', 'start', 'ofst', 'headlength', 'headwidth'] : []), ...(['Nullor', 'VoltageTransactor', 'TransimpedanceTransactor', 'CurrentTransactor', 'TransadmittanceTransactor'].includes(type) ? ['reverse_output'] : []), ...(type === 'Triode' ? ['heater', 'split'] : []), ...(type === 'DualVacuumTube' ? ['grids_left', 'grids_right', 'heater', 'cathode', 'anodetype'] : [])].includes(key)) throw new Error(`Unsupported argument: ${key}`);
           if (Object.prototype.hasOwnProperty.call(options, key)) throw new Error(`Duplicate argument: ${key}`);
           options[key] = value === undefined ? true : value;
         }
@@ -2039,7 +2167,8 @@
         log(`Subcircuit ${type}: ${'at' in options ? 'at=' + options.at : 'sequential'}`);
         continue;
       }
-      if (!isMeter && (labels.some(label => (type !== 'Opamp' && (label.fontsize !== undefined || label.color !== undefined)) || (!logicGateTypes.has(type) && type !== 'Opamp' && ['name', 'in1', 'in2', 'display'].includes(label.loc))) || ['needle_percent', 'window_fill', 'input_fill', 'signal', 'signal_color', 'signal_lw', 'grid'].some(key => key in options))) throw new Error(`The specified arguments are not supported for ${type}.`);
+      const labelStyleAllowed = label => type === 'Opamp' || (type === 'Header' && label.color === undefined);
+      if (!isMeter && (labels.some(label => (!labelStyleAllowed(label) && (label.fontsize !== undefined || label.color !== undefined)) || (!logicGateTypes.has(type) && type !== 'Opamp' && ['name', 'in1', 'in2', 'display'].includes(label.loc))) || ['needle_percent', 'window_fill', 'input_fill', 'signal', 'signal_color', 'signal_lw', 'grid'].some(key => key in options))) throw new Error(`The specified arguments are not supported for ${type}.`);
       if (type !== 'Wire' && (['shape', 'k'].some(key => key in options) || (type !== 'Line' && 'arrow' in options))) throw new Error(`Wire arguments cannot be used with ${type}.`);
       if (type === 'Line' && 'arrow' in options && !['->', '<-', '<->', '|->', '|-o', 'o-', '-o', 'o-o'].includes(options.arrow)) throw new Error('Invalid Line arrow.');
       if (type === 'Rectifier') {
@@ -2839,8 +2968,10 @@
               anchors[pin.anchor || (pin.name === '>' ? 'CLK' : pin.name)] = end;
             } else if (pin.anchor) anchors[pin.anchor] = end;
             if (pin.num) {
+              // Fixed-pin chips never call .side(), so their pin labels use
+              // Schemdraw's plblofst default of 0.075 units (2.7 px).
               const shift = invert ? 10.8 : 0;
-              const pofst = side === 'L' ? [-1.8 - shift, -1.8] : side === 'R' ? [1.8 + shift, -1.8] : side === 'T' ? [1.8, -1.8 - shift] : [1.8, 1.8 + shift];
+              const pofst = side === 'L' ? [-2.7 - shift, -2.7] : side === 'R' ? [2.7 + shift, -2.7] : side === 'T' ? [2.7, -2.7 - shift] : [2.7, 2.7 + shift];
               const base = { L: ['right', 'bottom'], R: ['left', 'bottom'], T: ['left', 'bottom'], B: ['left', 'top'] }[side];
               addPinText(side, p, p[0] + pofst[0], p[1] + pofst[1], pin.num, 11, base[0], base[1], true);
             }
@@ -3253,13 +3384,49 @@
       }
       if (type === 'Ic' || type === 'Multiplexer') {
         const isMux = type === 'Multiplexer';
-        const allowedIc = ['at', 'anchor', 'drop', 'theta', 'color', 'size', 'pin', ...(isMux ? ['demux', 'slant', 'pinspacing', 'flip', 'reverse'] : [])];
-        if (labels.some(label => label.items || label.halign != null || label.ofst != null || label.rotate !== undefined) || Object.keys(options).some(key => !allowedIc.includes(key))) throw new Error(`${type} supports size, pin, at, anchor, drop, theta, color, and labels${isMux ? ', demux, slant, pinspacing, flip, reverse' : ''}.`);
+        const allowedIc = ['at', 'anchor', 'drop', 'theta', 'color', 'size', 'pin', 'side', 'pinspacing', 'plblofst', 'botlabel', ...(isMux ? ['demux', 'slant', 'pinspacing', 'flip', 'reverse'] : [])];
+        if (labels.some(label => label.items || label.halign != null || label.ofst != null || label.rotate !== undefined) || Object.keys(options).some(key => !allowedIc.includes(key))) throw new Error(`${type} supports size, side, pin, pinspacing, plblofst, botlabel, at, anchor, drop, theta, color, and labels${isMux ? ', demux, slant, pinspacing, flip, reverse' : ''}.`);
         const sizeMatch = /^\(\s*(\d+(?:\.\d+)?|\.\d+)\s+(\d+(?:\.\d+)?|\.\d+)\s*\)$/.exec(options.size === undefined ? '' : options.size);
-        if (!sizeMatch) throw new Error(`${type} requires size="(width height)".`);
+        if (options.size !== undefined && !sizeMatch) throw new Error(`${type} size must be specified as "(width height)".`);
+        if (!sizeMatch && isMux) throw new Error('Multiplexer requires size="(width height)".');
         if ('at' in options) [x, y] = atPoint(options.at);
-        const W = Number(sizeMatch[1]) * 36, HH = Number(sizeMatch[2]) * 36;
-        if (!(W > 0) || !(HH > 0)) throw new Error(`${type} size must be positive.`);
+        let W = sizeMatch ? Number(sizeMatch[1]) * 36 : 0;
+        let HH = sizeMatch ? Number(sizeMatch[2]) * 36 : 0;
+        if (sizeMatch && (!(W > 0) || !(HH > 0))) throw new Error(`${type} size must be positive.`);
+        const unitNumber = (key, fallback) => {
+          if (!(key in options)) return fallback;
+          if (typeof options[key] !== 'string' || !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(options[key]) || !Number.isFinite(Number(options[key]))) throw new Error(`${key} must be a non-negative number.`);
+          return Number(options[key]);
+        };
+        // Schemdraw's Ic `pinspacing` parameter is the default spacing for
+        // sides that do not call .side(); `plblofst` is the matching default
+        // for pin-number offsets.
+        const icPinspacing = unitNumber('pinspacing', 0);
+        const plblofst = unitNumber('plblofst', 0.075);
+        if ('botlabel' in options && typeof options.botlabel !== 'string') throw new Error('botlabel must be a string.');
+        const botLabel = 'botlabel' in options ? options.botlabel : null;
+        // Schemdraw's IcSide defaults. Sides set with .side() use pinlabel_ofst
+        // 0.05 and spacing 0, while untouched sides use pinspacing/plblofst.
+        const defaultSide = () => ({
+          spacing: icPinspacing, pad: 0.5, leadlen: 0.5,
+          label_ofst: 0.15, label_size: 14,
+          pinlabel_ofst: plblofst, pinlabel_size: 11
+        });
+        const sides = { L: defaultSide(), R: defaultSide(), T: defaultSide(), B: defaultSide() };
+        for (const raw of options.side || []) {
+          const parts = String(raw).trim().split(/\s+/);
+          const side = parts[0] ? parts[0][0].toUpperCase() : '';
+          if (!Object.prototype.hasOwnProperty.call(sides, side)) throw new Error(`side must be L, R, T, or B: ${raw}`);
+          const setup = Object.assign(defaultSide(), { spacing: 0, pinlabel_ofst: 0.05 });
+          for (const token of parts.slice(1)) {
+            const match = /^([a-z_]+)=(.+)$/.exec(token);
+            if (!match || !Object.prototype.hasOwnProperty.call(setup, match[1])) throw new Error(`Unsupported Ic side argument: ${token}`);
+            const value = Number(match[2]);
+            if (!Number.isFinite(value) || value < 0) throw new Error(`Ic side ${match[1]} must be a non-negative number.`);
+            setup[match[1]] = value;
+          }
+          sides[side] = setup;
+        }
         let demux = false, slant = 0, pinspacing = 0;
         if (isMux) {
           if ('demux' in options) {
@@ -3279,22 +3446,74 @@
         const used = new Set(['center', 'xy']);
         for (const raw of options.pin || []) {
           const parts = String(raw).trim().split(/\s+/);
-          if (parts.length < 2 || parts.length > 3) throw new Error(`pin must be specified as "side name number": ${raw}`);
-          const side = parts[0].toUpperCase();
+          if (parts.length < 2) throw new Error(`pin must be specified as "side name number": ${raw}`);
+          // Schemdraw takes the first letter of the side name, so both `L` and
+          // `left` work.
+          const side = parts[0].charAt(0).toUpperCase();
           if (!Object.prototype.hasOwnProperty.call(pins, side)) throw new Error(`pin side must be L, R, T, or B: ${raw}`);
           const name = parts[1] === '-' ? null : parts[1];
           const num = parts[2] === undefined || parts[2] === '-' ? null : parts[2];
           if (name !== null && !/^[A-Za-z_]\w*$/.test(name) && !(isMux && name === '>')) throw new Error(`pin name must contain only letters, digits, and underscores: ${name}`);
           if (num !== null && !/^[A-Za-z0-9_]+$/.test(num)) throw new Error(`Invalid pin number: ${num}`);
+          // Optional pin attributes: slot="X/Y" and invert (Schemdraw's IcPin).
+          let slot = null, invert = false;
+          for (const token of parts.slice(3)) {
+            if (token === 'invert') { invert = true; continue; }
+            const attr = /^slot=(\d+)\/(\d+)$/.exec(token);
+            if (!attr) throw new Error(`Unsupported Ic pin argument: ${token}`);
+            const index = Number(attr[1]), count = Number(attr[2]);
+            if (!(index >= 1) || !(count >= index) || count > 100) throw new Error(`Invalid Ic pin slot: ${token}`);
+            slot = [index, count];
+          }
           if (name && used.has(name)) throw new Error(`Duplicate terminal name: ${name}`);
-          if (num && used.has('pin' + num)) throw new Error(`Duplicate terminal name: pin${num}`);
+          // Schemdraw does not reject duplicate pin numbers; the `pin<number>`
+          // anchor is overwritten by the later pin. Keep that behaviour so
+          // gallery examples with repeated numbers (e.g. pin='4' twice) render.
           if (name) used.add(name);
           if (num) used.add('pin' + num);
-          pins[side].push({ name, num, clock: name === '>' });
+          pins[side].push({ name, num, clock: name === '>', slot, invert });
         }
-        const pad = 18, leadLen = 18;
+        // Schemdraw's _setsize: compute the box from the per-side pads and
+        // spacing when size is omitted, then center each side's pins.
+        // Schemdraw's _countpins uses the largest slot denominator, so gaps
+        // such as slot 9/22 and 16/22 stay empty.
+        const counts = Object.fromEntries(['L', 'R', 'T', 'B'].map(side =>
+          [side, Math.max(pins[side].length, 0, ...pins[side].map(pin => pin.slot ? pin.slot[1] : 0))]));
+        if (!sizeMatch) {
+          const lengths = {};
+          const labelWidths = { L: 0, R: 0 };
+          for (const side of ['L', 'R', 'T', 'B']) {
+            const setup = sides[side];
+            if (setup.spacing === 0) setup.spacing = 0.6;
+            lengths[side] = setup.pad * 2 + setup.spacing * (counts[side] - 1);
+            if (side === 'L' || side === 'R') {
+              for (const pin of pins[side]) {
+                if (pin.name) labelWidths[side] = Math.max(labelWidths[side], textWidth(pin.name, 14) / 36);
+              }
+            }
+          }
+          // Schemdraw uses edgepad 0.5 and lofst 0.15 for the minimum box.
+          const labelw = labelWidths.L + labelWidths.R + 4 * 0.15;
+          W = Math.max(lengths.T, lengths.B, 2.5, labelw) * 36;
+          HH = Math.max(lengths.L, lengths.R, 2.5) * 36;
+          for (const side of ['L', 'R']) sides[side].pad = (HH / 36 - sides[side].spacing * (counts[side] - 1)) / 2;
+          for (const side of ['T', 'B']) sides[side].pad = (W / 36 - sides[side].spacing * (counts[side] - 1)) / 2;
+        } else {
+          // Schemdraw's _autopinlayout: keep the requested spacing and
+          // recenter the pins along the specified box size.
+          for (const side of ['L', 'R', 'T', 'B']) {
+            const setup = sides[side];
+            const length = side === 'T' || side === 'B' ? W / 36 : HH / 36;
+            if (setup.spacing === 0) {
+              if (counts[side] > 1) setup.spacing = (length - 2 * setup.pad) / (counts[side] - 1);
+              else setup.pad = length / 2;
+            } else {
+              setup.pad = (length - setup.spacing * (counts[side] - 1)) / 2;
+            }
+          }
+        }
         const anchors = { center: [W / 2, -HH / 2], xy: [0, 0] };
-        let leads = '';
+        let leads = '', bubbles = '';
         // Pin text positions are collected in local SVG coordinates (y down)
         // and written out once flip/reverse have been applied.
         const pending = [];
@@ -3315,38 +3534,53 @@
         const topAt = z => HH + (effectiveSlant < 0 ? -W * tan : 0) + z * tan;
         const bottomAt = z => (effectiveSlant < 0 ? W * tan : 0) - z * tan;
         for (const side of ['L', 'R', 'T', 'B']) {
-          const list = pins[side], n = list.length;
+          const list = pins[side], n = counts[side], setup = sides[side];
           const len = side === 'L' || side === 'R' ? HH : W;
-          const spacing = pinspacing > 0 ? pinspacing * 36 : (n > 1 ? (len - 2 * pad) / (n - 1) : 0);
-          const sidePad = pinspacing > 0 ? (len - spacing * (n - 1)) / 2 : pad;
+          const spacing = isMux && pinspacing > 0 ? pinspacing : setup.spacing;
+          const sidePad = isMux && pinspacing > 0 ? (len / 36 - spacing * (n - 1)) / 2 : setup.pad;
+          const leadLen = setup.leadlen * 36;
+          const bubbleR = 0.15 * 36;
           list.forEach((pin, i) => {
-            const z = n > 1 ? sidePad + i * spacing : len / 2;
+            const index = pin.slot ? pin.slot[0] - 1 : i;
+            const z = n > 1 ? (sidePad + index * spacing) * 36 : len / 2;
             const point = side === 'L' ? [0, z]
               : side === 'R' ? [W, z]
               : side === 'T' ? [z, topAt(z)]
               : [z, bottomAt(z)];
             const leadext = { L: [-leadLen, 0], R: [leadLen, 0], T: [0, leadLen], B: [0, -leadLen] }[side];
             const end = [point[0] + leadext[0], point[1] + leadext[1]];
-            leads += `M ${point[0]},${point[1]} L ${end[0]},${end[1]} `;
+            let start = point;
+            if (pin.invert) {
+              // Schemdraw's invert bubble sits just outside the box; the lead
+              // starts after the bubble and the pin number moves out by 2r.
+              const ofst = { L: [-bubbleR, 0], R: [bubbleR, 0], T: [0, bubbleR], B: [0, -bubbleR] }[side];
+              const c = [point[0] + ofst[0], point[1] + ofst[1]];
+              bubbles += `<circle cx="${c[0]}" cy="${c[1]}" r="${bubbleR}" fill="none" stroke="${color}" stroke-width="2"/>`;
+              start = [point[0] + 2 * ofst[0], point[1] + 2 * ofst[1]];
+            }
+            leads += `M ${start[0]},${start[1]} L ${end[0]},${end[1]} `;
             anchors[`in${side}${i + 1}`] = [end[0], -end[1]];
             if (pin.name) anchors[pin.name] = [end[0], -end[1]];
             if (pin.num) anchors[`pin${pin.num}`] = [end[0], -end[1]];
             if (pin.clock) {
-              // Schemdraw's _drawclkpin: 0.35 unit deep, 0.175 unit wide.
-              // The triangle points into the box.
+              // Schemdraw's _drawclkpin: sizes scale with the label font size.
+              const clkw = 0.4 * setup.label_size / 16 * 36;
+              const clkh = 0.2 * setup.label_size / 16 * 36;
               const dir = { L: 1, R: -1, T: -1, B: 1 }[side];
-              if (side === 'T' || side === 'B') leads += `M ${point[0] - 6.3},${point[1]} L ${point[0]},${point[1] + dir * 12.6} L ${point[0] + 6.3},${point[1]} `;
-              else leads += `M ${point[0]},${point[1] + 6.3} L ${point[0] + dir * 12.6},${point[1]} L ${point[0]},${point[1] - 6.3} `;
+              if (side === 'T' || side === 'B') leads += `M ${point[0] - clkh},${point[1]} L ${point[0]},${point[1] + dir * clkw} L ${point[0] + clkh},${point[1]} `;
+              else leads += `M ${point[0]},${point[1] + clkh} L ${point[0] + dir * clkw},${point[1]} L ${point[0]},${point[1] - clkh} `;
               anchors.CLK = [end[0], -end[1]];
               anchors['>'] = [end[0], -end[1]];
             }
-            const lofst = { L: [5.4, 0], R: [-5.4, 0], T: [0, -5.4], B: [0, 5.4] }[side];
+            const lofst = { L: [setup.label_ofst * 36, 0], R: [-setup.label_ofst * 36, 0], T: [0, -setup.label_ofst * 36], B: [0, setup.label_ofst * 36] }[side];
             const lalign = { L: ['left', 'center'], R: ['right', 'center'], T: ['center', 'top'], B: ['center', 'bottom'] }[side];
-            if (pin.name && !pin.clock) text(point[0] + lofst[0], -(point[1] + lofst[1]), pin.name, 14, lalign, side);
+            if (pin.name && !pin.clock) text(point[0] + lofst[0], -(point[1] + lofst[1]), pin.name, setup.label_size, lalign, side);
             if (pin.num) {
-              const pofst = { L: [-2.7, 2.7], R: [2.7, 2.7], T: [2.7, 2.7], B: [2.7, -2.7] }[side];
+              const p = setup.pinlabel_ofst * 36;
+              const shift = pin.invert ? 2 * bubbleR : 0;
+              const pofst = { L: [-p - shift, p], R: [p + shift, p], T: [p, p + shift], B: [p, -p - shift] }[side];
               const palign = { L: ['right', 'bottom'], R: ['left', 'bottom'], T: ['left', 'bottom'], B: ['left', 'top'] }[side];
-              text(point[0] + pofst[0], -(point[1] + pofst[1]), pin.num, 11, palign, side);
+              text(point[0] + pofst[0], -(point[1] + pofst[1]), pin.num, setup.pinlabel_size, palign, side);
             }
           });
         }
@@ -3386,25 +3620,33 @@
         if ('drop' in options && !Object.prototype.hasOwnProperty.call(placed.anchors, options.drop)) throw new Error(`Unknown ${type} drop: ${options.drop}`);
         const texts = pending.map(({ px, py, value, size, align }) => {
           const anchor = { left: 'start', center: 'middle', right: 'end' }[align[0]];
-          const baseline = align[1] === 'center' ? 'central' : align[1] === 'top' ? 'hanging' : 'auto';
+          // Schemdraw's text_tosvg uses the ideographic baseline for
+          // valign='bottom' (pin numbers on every side except top).
+          const baseline = align[1] === 'center' ? 'central' : align[1] === 'top' ? 'hanging' : 'ideographic';
           return `<text x="${px}" y="${py}" text-anchor="${anchor}" dominant-baseline="${baseline}"${textFill} font-family="sans-serif" font-size="${size}">${escapeText(value)}</text>`;
         }).join('');
         // The component label sits at the box center (center anchor), so flip
         // moves it with the box.
         const labelY = flip ? HH / 2 : -HH / 2;
         const labelTexts = labels.map(label => `<text x="${W / 2}" y="${labelY}" text-anchor="middle" dominant-baseline="central"${textFill} font-family="sans-serif" font-size="${labelSize}">${labelContent(label.text)}</text>`).join('');
-        const body = `<g transform="scale(1 -1)"><path d="${shape}" ${stroke}/><path d="${leads}" ${stroke}/></g>${labelTexts}`;
+        // `botlabel` is Schemdraw's label at the bottom edge of the element
+        // (0.1 units below the bbox, so below any bottom leads).
+        const bottomLead = Math.max(0, ...pins.B.map(() => sides.B.leadlen * 36));
+        const botLabelText = botLabel === null ? '' :
+          `<text x="${W / 2}" y="${bottomLead + 3.6}" text-anchor="middle" dominant-baseline="hanging"${textFill} font-family="sans-serif" font-size="${labelSize}">${labelContent(botLabel)}</text>`;
+        const body = `<g transform="scale(1 -1)"><path d="${shape}" ${stroke}/><path d="${leads}" ${stroke}/>${bubbles}</g>${labelTexts}${botLabelText}`;
         // .anchor() moves the glyph so the named terminal sits at the insertion
         // point; use the anchor-adjusted local origin for the whole group.
         const [bodyX, bodyY] = placed.transform(0, 0);
         elements.push(`<g transform="translate(${bodyX} ${bodyY}) rotate(${angle2})">${body}${texts}</g>`);
-        // Reserve room for the 0.5-unit leads and pin numbers. When there are
-        // no side labels, keep Schemdraw's full unit of margin around the box.
+        // Reserve room for the leads and pin numbers. When there are no side
+        // labels, keep Schemdraw's full unit of margin around the box.
         const sideLabel = ['L', 'R'].some(side => (options.pin || []).some(raw => {
           const parts = String(raw).trim().split(/\s+/);
-          return parts[0].toUpperCase() === side && parts[1] && parts[1] !== '-';
+          return parts[0].charAt(0).toUpperCase() === side && parts[1] && parts[1] !== '-';
         }));
-        const margin = sideLabel ? 21.6 : 39.6;
+        const maxLead = Math.max(...['L', 'R', 'T', 'B'].map(side => sides[side].leadlen * 36));
+        const margin = Math.max(sideLabel ? 21.6 : 39.6, maxLead + 3.6);
         const frame = corners.map(([px, py]) => {
           let fx = px, fy = py;
           if (flip) fy = -fy;
@@ -3424,14 +3666,15 @@
         }
         if (name) names[name] = placed.anchors;
         if ('drop' in options) [x, y] = placed.anchors[options.drop];
-        log(`${type}: size=${sizeMatch[1]}x${sizeMatch[2]} pins=${(options.pin || []).length}`);
+        log(`${type}: size=${(W / 36).toFixed(2)}x${(HH / 36).toFixed(2)} pins=${(options.pin || []).length}`);
         continue;
       }
       if (['IcDIP', 'Header', 'Transformer'].includes(type)) {
-        const specific = type === 'IcDIP' ? ['pins', 'notch', 'width', 'pinw', 'spacing', 'number', 'pfontsize'] : type === 'Header' ? ['rows', 'cols', 'style', 'numbering', 'shownumber', 'pinspacing', 'edge', 'pinfill', 'pinsleft', 'pinsright', 'pinalignleft', 'pinalignright', 'pinfontsizeleft', 'pinfontsizeright'] : ['t1', 't2', 'core', 'loop', 'align'];
-        if (labels.length || length !== null || Object.keys(options).some(k => !['at', 'anchor', 'drop', 'theta', 'color', ...specific].includes(k))) throw new Error(`The specified arguments are not supported for ${type}.`);
+        const specific = type === 'IcDIP' ? ['pins', 'notch', 'width', 'pinw', 'spacing', 'number', 'pfontsize'] : type === 'Header' ? ['rows', 'cols', 'style', 'numbering', 'shownumber', 'pinspacing', 'edge', 'pinfill', 'pinsleft', 'pinsright', 'pinalignleft', 'pinalignright', 'pinfontsizeleft', 'pinfontsizeright', 'flip', 'dx', 'dy'] : ['t1', 't2', 'core', 'loop', 'align'];
+        const headerLabels = type === 'Header' ? labels : [];
+        if ((type !== 'Header' && labels.length) || headerLabels.some(label => label.items || label.halign != null || label.ofst != null || label.rotate !== undefined || (label.loc && label.loc !== 'top')) || headerLabels.length > 1 || length !== null || Object.keys(options).some(k => !['at', 'anchor', 'drop', 'theta', 'color', ...specific].includes(k))) throw new Error(`The specified arguments are not supported for ${type}.`);
         if (selectedDirection && 'theta' in options) throw new Error('A direction and theta cannot be specified together.');
-        if (type === 'Header' && (selectedDirection || 'theta' in options)) throw new Error('Header does not support direction specifiers.');
+        if (type === 'Header' && selectedDirection && selectedDirection !== 'right') throw new Error('Header only supports the right direction.');
         const num = (key, fallback, integer = false, max = 100) => {
           const v = options[key];
           if (v === undefined) return fallback;
@@ -3444,7 +3687,7 @@
           return options[key] === 'True';
         };
         const anchors = { xy: [0, 0] }, shapes = [], texts = [], pinMarks = [];
-        let box;
+        let box, headerW = 0, headerH = 0;
         const path = d => shapes.push(`<path d="${d}" ${stroke}/>`);
         const text = (px, py, value, size, align = 'middle', baseline = 'central') => texts.push({ px, py, value, size, align, baseline });
         if (type === 'IcDIP') {
@@ -3482,6 +3725,7 @@
           // Schemdraw resolves the default 'bg' fill to its default white background.
           const fill = options.pinfill === undefined || options.pinfill === 'bg' ? 'white' : readColor(options.pinfill);
           const w = (cols - 1) * spacing + 2 * edge, h = (rows - 1) * spacing + 2 * edge, r = 3.6;
+          headerW = w; headerH = h;
           path(`M 0,0 V ${-h} H ${w} V 0 Z`);
           for (let row = 0; row < rows; row++) for (let col = 0; col < cols; col++) {
             const px = col * spacing + edge, py = -h + row * spacing + edge;
@@ -3498,7 +3742,7 @@
             if (shownumber) text(col % 2 ? w + 1.8 : -1.8, py, n, 9, col % 2 ? 'start' : 'end', 'ideographic');
             // Pin name labels (Schemdraw `pinsleft` / `pinsright`).
             if (pinLeft && (cols === 1 || col % 2 === 0)) text(-1.8, py, pinLeft[row] ?? '', pinFontLeft, 'end', 'ideographic');
-            if (pinRight && col % 2 === 1) text(w + 1.8, py, pinRight[row] ?? '', pinFontRight, 'start', 'ideographic');
+            if (pinRight && (cols === 1 || col % 2 === 1)) text(w + 1.8, py, pinRight[row] ?? '', pinFontRight, 'start', 'ideographic');
           }
           box = [-7, -h - 7, w + 7, 7];
         } else {
@@ -3515,23 +3759,42 @@
           if (core) path(`M ${cw*.4},${-top} V ${-bot} M ${cw*.6},${-top} V ${-bot}`);
           box = [-step/2, -top, cw+step/2, -bot];
         }
+        // Schemdraw's generic flip mirrors the element about its local x axis.
+        // Text stays upright, so only the positions (and anchors/box) mirror.
+        const headerFlip = type === 'Header' && 'flip' in options;
+        if (headerFlip) {
+          for (const key of Object.keys(anchors)) anchors[key] = [anchors[key][0], -anchors[key][1]];
+          for (const item of texts) item.py = -item.py;
+          for (const mark of pinMarks) mark.py = -mark.py;
+          box = [box[0], -box[3], box[2], -box[1]];
+        }
         let theta = type === 'Header' ? 0 : selectedDirection ? ({right: 0, up: 90, left: 180, down: -90})[selectedDirection] : typeof direction === 'number' ? direction : ({right: 0, up: 90, left: 180, down: -90})[direction];
         if ('theta' in options) {
           if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta must be a finite number.');
           theta = Number(options.theta);
         }
         const a = -theta * Math.PI / 180, dx = Math.cos(a), dy = Math.sin(a);
-        const origin = 'at' in options ? atPoint(options.at) : [x, y];
+        // Copy the point: `at` may reference a named anchor array that must not
+        // be changed by the dx/dy offset below.
+        const origin = 'at' in options ? [...atPoint(options.at)] : [x, y];
+        // Schemdraw's .at(xy, dx=..., dy=...) offsets the placement point in
+        // drawing units (positive dy is up).
+        for (const key of ['dx', 'dy']) {
+          if (!(key in options)) continue;
+          if (typeof options[key] !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options[key]) || !Number.isFinite(Number(options[key]))) throw new Error(`Header ${key} must be a finite number.`);
+          if (key === 'dx') origin[0] += Number(options[key]) * 36;
+          else origin[1] -= Number(options[key]) * 36;
+        }
         const placed = placeComponent({ anchors }, origin, { direction: [dx, dy], anchor: options.anchor === undefined ? null : options.anchor });
         if ('drop' in options && !Object.prototype.hasOwnProperty.call(anchors, options.drop)) throw new Error(`Unknown drop: ${options.drop}`);
         const [ox, oy] = placed.transform(0, 0);
-        elements.push(`<g transform="translate(${ox} ${oy}) rotate(${-theta})">${shapes.join('')}</g>`);
+        const headerMirror = headerFlip ? ' scale(1 -1)' : '';
+        elements.push(`<g transform="translate(${ox} ${oy}) rotate(${-theta})${headerMirror}">${shapes.join('')}</g>`);
         for (const mark of pinMarks) {
+          const [wx, wy] = placed.transform(mark.px, mark.py);
           if (mark.style === 'square') {
-            // Keep the square aligned with a rotated Header by reusing its transform.
-            overlay.push(`<rect x="${mark.px - mark.r}" y="${mark.py - mark.r}" width="${2 * mark.r}" height="${2 * mark.r}" fill="${mark.fill}" stroke="${color}" stroke-width="2" transform="translate(${ox} ${oy}) rotate(${-theta})"/>`);
+            overlay.push(`<rect x="${wx - mark.r}" y="${wy - mark.r}" width="${2 * mark.r}" height="${2 * mark.r}" fill="${mark.fill}" stroke="${color}" stroke-width="2"/>`);
           } else {
-            const [wx, wy] = placed.transform(mark.px, mark.py);
             bgMarker(wx, wy, mark.r, color, mark.fill);
           }
         }
@@ -3542,9 +3805,76 @@
           if (t.baseline === 'ideographic') elements.push(`<text x="${tx}" y="${ty - t.size}" text-anchor="${t.align}" dominant-baseline="ideographic" fill="${color}" font-family="sans-serif" font-size="${t.size}"><tspan x="${tx}" dy="${t.size}">${t.value}</tspan></text>`);
           else elements.push(`<text x="${tx}" y="${ty}" text-anchor="${t.align}" dominant-baseline="central" fill="${color}" font-family="sans-serif" font-size="${t.size}">${t.value}</text>`);
         }
+        // Header labels default to Schemdraw's 'top' location: 0.1 units
+        // above the (possibly flipped) box, centred.
+        for (const label of headerLabels) {
+          const size = label.fontsize === undefined ? labelSize : label.fontsize;
+          const top = headerFlip ? 0 : -headerH;
+          const [lx, ly] = placed.transform(headerW / 2, top - 3.6);
+          elements.push(`<text x="${lx}" y="${ly}" text-anchor="middle"${textFill} font-family="sans-serif" font-size="${size}">${labelContent(label.text)}</text>`);
+          const width = Math.max(size, Array.from(label.text).length * size * .6);
+          bounds(lx - width, ly - size - 4, lx + width, ly + 4);
+        }
         if (name) names[name] = placed.anchors;
         if ('drop' in options) { [x, y] = placed.anchors[options.drop]; direction = theta; }
         log(`${type}: ${'drop' in options ? 'drop=' + options.drop : 'cursor unchanged'}`);
+        continue;
+      }
+      if (type === 'OrthoLines') {
+        if (labels.length || selectedDirection || length !== null || Object.keys(options).some(key => !['at', 'to', 'delta', 'n', 'dy', 'xstart', 'color'].includes(key))) throw new Error('OrthoLines supports n, dy, xstart, at, to, delta, and color.');
+        let n = 1;
+        if ('n' in options) {
+          if (typeof options.n !== 'string' || !/^\d+$/.test(options.n) || !Number.isSafeInteger(Number(options.n)) || Number(options.n) < 1 || Number(options.n) > 100) throw new Error('OrthoLines n must be an integer from 1 to 100.');
+          n = Number(options.n);
+        }
+        let ndy = 0.6 * 36;
+        if ('dy' in options) {
+          if (typeof options.dy !== 'string' || !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.dy) || !(Number(options.dy) > 0)) throw new Error('OrthoLines dy must be a positive number.');
+          ndy = Number(options.dy) * 36;
+        }
+        let xstart = null;
+        if ('xstart' in options) {
+          if (typeof options.xstart !== 'string' || !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.xstart) || Number(options.xstart) < 0 || Number(options.xstart) > 1) throw new Error('OrthoLines xstart must be between 0 and 1.');
+          xstart = Number(options.xstart);
+        }
+        if ('at' in options) [x, y] = atPoint(options.at);
+        let end;
+        if ('delta' in options) {
+          const m = /^\(\s*(\S+)\s+(\S+)\s*\)$/.exec(String(options.delta));
+          if (!m) throw new Error('OrthoLines delta must be specified as delta="(dx dy)".');
+          end = [x + readMove(m[1], unit), y - readMove(m[2], unit)];
+        } else if ('to' in options) {
+          end = point(options.to);
+        } else throw new Error('OrthoLines requires to or delta.');
+        const originX = x, originY = -y;
+        const ddx = end[0] - x, ddy = -end[1] - originY;
+        const lines = [];
+        if (Math.abs(ddy) < 0.05 * 36) {
+          for (let i = 0; i < n; i++) {
+            const yy = -i * ndy;
+            lines.push([[0, yy], [ddx, yy]]);
+          }
+        } else {
+          let x0;
+          if (xstart !== null) {
+            x0 = ddy > 0 ? ddx * xstart : ddx * xstart - ndy - ndy * (n - 1) * xstart;
+          } else {
+            x0 = ddx > 0 ? ddx / 2 - (ndy * (n - 1)) / 2 : ddx / 2 + (ndy * (n - 1)) / 2;
+          }
+          for (let i = 0; i < n; i++) {
+            const yy = -i * ndy;
+            let xx;
+            if (ddy > 0) xx = ddx > 0 ? x0 + ndy * i : x0 - ndy * i;
+            else xx = ddx > 0 ? x0 + (n - i) * ndy : x0 - (n - i) * ndy;
+            lines.push([[0, yy], [xx, yy], [xx, yy + ddy], [ddx, yy + ddy]]);
+          }
+        }
+        for (const vertices of lines) {
+          const world = vertices.map(([vx, vy]) => [originX + vx, -(originY + vy)]);
+          elements.push(`<path d="${world.map((p, i) => `${i ? 'L' : 'M'} ${p[0]},${p[1]}`).join(' ')}" ${stroke}/>`);
+          for (const [px, py] of world) bounds(px - 2, py - 2, px + 2, py + 2);
+        }
+        log(`OrthoLines: n=${n} dy=${(ndy / 36).toFixed(2)}`);
         continue;
       }
       if (type === 'Wire') {
@@ -5364,7 +5694,16 @@
         const reflected = ('reverse' in options && !['Potentiometer', 'Rshunt', 'SCR', 'Triac', 'BjtNpn2', 'BjtPnp2', 'NMos2', 'PMos2', 'ResistorVar'].includes(type))
           ? ` transform="translate(${2 * (length / 2 + shiftOffset)} 0) scale(-1 1)"` : '';
         if (type === 'Gap') shape = '';
-        else if (zoom !== 1 && !['Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE'].includes(type)) {
+        else if (zoom !== 1 && partDef && partDef.form === 'path') {
+          // Path parts are drawn across the element's actual length. Zoom the
+          // body about its centre, then redraw the leads so they still reach
+          // the terminals (Schemdraw keeps the element length unchanged).
+          const c = length / 2 + shiftOffset, half = (bodyLength / 2) * zoom;
+          const zstroke = stroke.replace(/stroke-width="2"/g, `stroke-width="${2 / zoom}"`);
+          const zcircle = circle.replace(/stroke-width="2"/g, `stroke-width="${2 / zoom}"`);
+          shape = `<g transform="translate(${c} 0) scale(${zoom}) translate(${-c} 0)">${zcircle}<path d="${path}"${reflected} ${zstroke}/></g>` +
+            `<path d="M 0,0 L ${c - half},0 M ${c + half},0 L ${length},0" ${stroke}/>`;
+        } else if (zoom !== 1 && !['Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE'].includes(type)) {
           // Zoom the fixed 108-unit glyph about its centre, then add leads.
           // The group scale also scales stroke widths, so divide them back.
           const c = length / 2 + shiftOffset, half = 54 * zoom;
@@ -6106,7 +6445,7 @@
       }
       // An unclosed quote here means a component argument was broken across
       // lines: the rest of the argument is on the following line.
-      if (quoted) throw new Error('Line break error. A quote is not closed on this line; write each component on one line.');
+      if (quoted) throw new Error('Line break error. A quote is not closed on this line; labels cannot span lines.');
       if (depth === 0) {
         if (subName) { subs[subName] = { source: lines.join('\n'), params: subParams }; subName = null; subParams = []; }
         else circuits.push(lines.join('\n'));

@@ -1,0 +1,9 @@
+{
+  "id": "fleming-plugin",
+  "name": "Fleming",
+  "version": "0.1.0",
+  "minAppVersion": "1.15.1",
+  "description": "Generation of schematic snippet from text in a simillar manner as markdown",
+  "author": "Kirimaru",
+  "isDesktopOnly": false
+}

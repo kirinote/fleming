@@ -1433,6 +1433,27 @@
     return false;
   }
 
+  // A `#` outside a double-quoted value starts a comment that runs to the end
+  // of the physical line. It is recognised at the start of a line or directly
+  // after whitespace or an argument boundary, so an unquoted hexadecimal colour
+  // such as `color=#0000ff` is not cut.
+  const commentBoundary = /[\s{}\[\](),:;"]/;
+  function stripInlineComment(text) {
+    let quoted = false, escaped = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (quoted) {
+        if (escaped) escaped = false;
+        else if (ch === '\\') escaped = true;
+        else if (ch === '"') quoted = false;
+        continue;
+      }
+      if (ch === '"') { quoted = true; continue; }
+      if (ch === '#' && (i === 0 || commentBoundary.test(text[i - 1]))) return text.slice(0, i).trimEnd();
+    }
+    return text;
+  }
+
   // Walk a physical line outside quotes, tracking escapes and bracket depth.
   // `visit(char, index, depth)` is called for every character outside quotes.
   function scanFlemingLine(text, visit) {
@@ -1545,7 +1566,7 @@
     if (typeof source !== 'string') throw new TypeError('source must be a string.');
     // Physical lines are joined into logical lines while they end with a
     // top-level comma. A component still occupies exactly one logical line.
-    const logical = buildLogicalLines(source.split(/\r?\n/).map((s, i) => ({ text: s.trim(), number: i + 1 })))
+    const logical = buildLogicalLines(source.split(/\r?\n/).map((s, i) => ({ text: stripInlineComment(s).trim(), number: i + 1 })))
       .filter(s => s.text && !s.text.startsWith('#'));
     if (!/^circuit\s*\{$/.test(logical.shift()?.text || '')) throw new Error('Specify exactly one circuit { ... } block.');
     const breakError = (label, detail) =>
@@ -6885,9 +6906,10 @@
     const circuits = [], subs = Object.create(null);
     let lines = null, depth = 0, layout = null, titles = null, size = null, subName = null, subParams = [];
     for (const raw of source.split(/\r?\n/)) {
-      const line = raw.trim();
-      if (!line || line.startsWith('#')) {
-        if (lines) lines.push(raw);
+      const content = stripInlineComment(raw);
+      const line = content.trim();
+      if (!line) {
+        if (lines) lines.push(content);
         continue;
       }
       if (depth === 0) {
@@ -6957,12 +6979,12 @@
           continue;
         }
         if (!/^circuit\s*\{$/.test(line)) throw new Error(`Expected circuit or directive: ${line}`);
-        lines = []; depth = 1; lines.push(raw); continue;
+        lines = []; depth = 1; lines.push(content); continue;
       }
-      lines.push(raw);
+      lines.push(content);
       let quoted = false;
       let escaped = false;
-      for (const char of raw) {
+      for (const char of content) {
         if (escaped) { escaped = false; continue; }
         if (char === '\\') escaped = true;
         else if (char === '"') quoted = !quoted;

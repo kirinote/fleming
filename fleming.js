@@ -6904,7 +6904,7 @@
   function splitDocument(source) {
     if (typeof source !== 'string') throw new TypeError('source must be a string.');
     const circuits = [], subs = Object.create(null);
-    let lines = null, depth = 0, layout = null, titles = null, size = null, subName = null, subParams = [];
+    let lines = null, depth = 0, layout = null, titles = null, scale = null, subName = null, subParams = [];
     for (const raw of source.split(/\r?\n/)) {
       const content = stripInlineComment(raw);
       const line = content.trim();
@@ -6941,26 +6941,18 @@
             if (!titles.length) throw new Error('@title requires at least one title.');
             continue;
           }
-          if (/^@size(?:\s|$)/.test(line)) {
-            if (size !== null) throw new Error('@size may only be specified once.');
-            const rest = line.slice(5).trim();
-            if (!rest) throw new Error('Invalid @size syntax: expected one scale factor.');
-            let value, remaining;
-            if (rest.startsWith('"')) {
-              const match = /^"((?:[^"\\]|\\["\\])*)"(?:\s+|$)/.exec(rest);
-              if (!match) throw new Error('Invalid @size syntax: expected one scale factor.');
-              value = match[1];
-              remaining = rest.slice(match[0].length).trim();
-            } else {
-              const match = /^(\S+)(?:\s+|$)/.exec(rest);
-              value = match[1];
-              remaining = rest.slice(match[0].length).trim();
-            }
-            if (remaining) throw new Error('Invalid @size syntax: expected one scale factor.');
-            if (!/^(?:\d+\.?\d*|\.\d+)$/.test(value)) throw new Error('@size scale must be a positive decimal number.');
-            const scale = Number(value);
-            if (!Number.isFinite(scale) || scale <= 0) throw new Error('@size scale must be a positive decimal number.');
-            size = scale;
+          if (/^@scale(?:\s|$)/.test(line)) {
+            if (scale !== null) throw new Error('@scale may only be specified once.');
+            const rest = line.slice(6).trim();
+            if (!rest) throw new Error('Invalid @scale syntax: expected one scale factor.');
+            const match = /^(\S+)(?:\s+|$)/.exec(rest);
+            const value = match[1];
+            const remaining = rest.slice(match[0].length).trim();
+            if (remaining) throw new Error('Invalid @scale syntax: expected one scale factor.');
+            if (!/^(?:\d+\.?\d*|\.\d+)$/.test(value)) throw new Error('@scale must be a positive decimal number.');
+            const factor = Number(value);
+            if (!Number.isFinite(factor) || factor <= 0) throw new Error('@scale must be a positive decimal number.');
+            scale = factor;
             continue;
           }
           if (layout !== null) throw new Error('@layout may only be specified once.');
@@ -7003,7 +6995,7 @@
     }
     if (depth !== 0) throw new Error('Missing closing brace for a block.');
     if (!circuits.length) throw new Error('Specify at least one circuit block.');
-    return { circuits, layout, titles, size, subs };
+    return { circuits, layout, titles, scale, subs };
   }
 
   function viewBoxSize(svg) {
@@ -7052,9 +7044,10 @@
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Circuit diagram">${inner}<text x="${round3(width / 2)}" y="${round3(circuitHeight + 24)}" text-anchor="middle" font-family="sans-serif" font-size="14">${escapeText(title)}</text></svg>`;
   }
 
-  // @size scales the finished SVG as a whole. The viewBox stays unchanged, so
-  // every circuit, title, and gap scales by the same factor.
-  function applySize(svg, scale) {
+  // @scale scales the finished SVG as a whole. The viewBox stays unchanged, so
+  // every circuit, title, and gap scales by the same factor. A missing @scale
+  // is 1, which leaves the output unchanged.
+  function applyScale(svg, scale) {
     if (!scale || scale === 1) return svg;
     const { width, height } = viewBoxSize(svg);
     // A single circuit already carries its size in points. A composed SVG
@@ -7069,7 +7062,7 @@
   }
 
   function render(source, log = () => {}) {
-    const { circuits, layout, titles, size, subs } = splitDocument(source);
+    const { circuits, layout, titles, scale, subs } = splitDocument(source);
     let rows, cols;
     if (layout === null) {
       rows = circuits.length; cols = 1;
@@ -7084,7 +7077,7 @@
     const selected = circuits.slice(0, count);
     // Preserve the pre-layout output exactly for a single untitled circuit.
     if (selected.length === 1) {
-      return applySize(addTitle(renderCircuit(selected[0], log, subs), titles && titles[0]), size);
+      return applyScale(addTitle(renderCircuit(selected[0], log, subs), titles && titles[0]), scale);
     }
     const children = selected.map((block, i) => {
       const svg = addTitle(renderCircuit(block, log, subs), titles && titles[i]);
@@ -7112,7 +7105,7 @@
       });
     }).join('');
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${round3(horizontal.total)}" height="${round3(vertical.total)}" viewBox="0 0 ${horizontal.total} ${vertical.total}" role="img" aria-label="Circuit diagram">${content}</svg>`;
-    return applySize(svg, size);
+    return applyScale(svg, scale);
   }
 
   root.Fleming = Object.freeze({ render, referenceImages });

@@ -1,6 +1,6 @@
-# schemdraw Circuit Gallery to fleming Sample Set
+# Schemdraw Circuit Gallery to Fleming Sample Set
 
-This note pairs each sample in the [schemdraw Circuit Gallery](https://schemdraw.readthedocs.io/en/stable/gallery/index.html) with the corresponding fleming notation.
+This note pairs each sample in the [Schemdraw Circuit Gallery](https://schemdraw.readthedocs.io/en/stable/gallery/index.html) with the corresponding Fleming notation.
 
 ---
 

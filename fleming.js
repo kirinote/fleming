@@ -1775,8 +1775,8 @@
       seen.add(key);
       if (key === 'loc') {
         // Schemdraw's _position_label accepts these aliases.
-        const locAlias = { bot: 'bot', B: 'bot', lft: 'left', L: 'left', rgt: 'right', R: 'right', T: 'top' }[arg[2]] || arg[2];
-        if (!['top', 'bot', 'left', 'right', 'start', 'end', 'istart', 'iend', 'base', 'collector', 'emitter', 'center', 'C2', 'gate', 'source', 'drain', 'bulk', 'name', 'in1', 'in2', 'out', 'c', 'cbar', 'display', 'vd', 'vs', 'n1', 'n2', 'n1a', 'n2a'].includes(locAlias) && !/^in\d+$/.test(locAlias) && !/^(?:N|S|E|W|NE|NW|SE|SW)$/.test(locAlias)) throw new Error(`Invalid label location: ${arg[2]}`);
+        const locAlias = { bot: 'bot', bottom: 'bot', B: 'bot', lft: 'left', L: 'left', rgt: 'right', R: 'right', T: 'top' }[arg[2]] || arg[2];
+        if (!['top', 'bot', 'left', 'right', 'start', 'end', 'istart', 'iend', 'base', 'collector', 'emitter', 'center', 'C2', 'gate', 'source', 'drain', 'bulk', 'name', 'in1', 'in2', 'out', 'c', 'cbar', 'display', 'vd', 'vs', 'n1', 'n2', 'n1a', 'n2a'].includes(locAlias) && !/^in\d+$/.test(locAlias) && !/^p\d+(?:_in)?$/.test(locAlias) && !/^(?:N|S|E|W|NE|NW|SE|SW)$/.test(locAlias)) throw new Error(`Invalid label location: ${arg[2]}`);
         label.loc = locAlias;
       } else if (key === 'halign') {
         if (!['left', 'center', 'right'].includes(arg[2])) throw new Error(`Invalid label alignment: ${arg[2]}`);
@@ -2167,7 +2167,7 @@
         log(`Subcircuit ${type}: ${'at' in options ? 'at=' + options.at : 'sequential'}`);
         continue;
       }
-      const labelStyleAllowed = label => type === 'Opamp' || (type === 'Header' && label.color === undefined);
+      const labelStyleAllowed = label => type === 'Opamp' || type === 'IcDIP' || (type === 'Header' && label.color === undefined);
       if (!isMeter && (labels.some(label => (!labelStyleAllowed(label) && (label.fontsize !== undefined || label.color !== undefined)) || (!logicGateTypes.has(type) && type !== 'Opamp' && ['name', 'in1', 'in2', 'display'].includes(label.loc))) || ['needle_percent', 'window_fill', 'input_fill', 'signal', 'signal_color', 'signal_lw', 'grid'].some(key => key in options))) throw new Error(`The specified arguments are not supported for ${type}.`);
       if (type !== 'Wire' && (['shape', 'k'].some(key => key in options) || (type !== 'Line' && 'arrow' in options))) throw new Error(`Wire arguments cannot be used with ${type}.`);
       if (type === 'Line' && 'arrow' in options && !['->', '<-', '<->', '|->', '|-o', 'o-', '-o', 'o-o'].includes(options.arrow)) throw new Error('Invalid Line arrow.');
@@ -3672,7 +3672,13 @@
       if (['IcDIP', 'Header', 'Transformer'].includes(type)) {
         const specific = type === 'IcDIP' ? ['pins', 'notch', 'width', 'pinw', 'spacing', 'number', 'pfontsize'] : type === 'Header' ? ['rows', 'cols', 'style', 'numbering', 'shownumber', 'pinspacing', 'edge', 'pinfill', 'pinsleft', 'pinsright', 'pinalignleft', 'pinalignright', 'pinfontsizeleft', 'pinfontsizeright', 'flip', 'dx', 'dy'] : ['t1', 't2', 'core', 'loop', 'align'];
         const headerLabels = type === 'Header' ? labels : [];
-        if ((type !== 'Header' && labels.length) || headerLabels.some(label => label.items || label.halign != null || label.ofst != null || label.rotate !== undefined || (label.loc && label.loc !== 'top')) || headerLabels.length > 1 || length !== null || Object.keys(options).some(k => !['at', 'anchor', 'drop', 'theta', 'color', ...specific].includes(k))) throw new Error(`The specified arguments are not supported for ${type}.`);
+        // IcDIP pin-name labels (Schemdraw's `Element._place_label`): one label
+        // per pin anchor (p1..pN, p1_in..pN_in) or box edge, no list labels.
+        const dipLabels = type === 'IcDIP' ? labels : [];
+        if (headerLabels.some(label => label.items || label.halign != null || label.ofst != null || label.rotate !== undefined || (label.loc && label.loc !== 'top')) || headerLabels.length > 1
+          || dipLabels.some(label => label.items)
+          || (type === 'Transformer' && labels.length)
+          || length !== null || Object.keys(options).some(k => !['at', 'anchor', 'drop', 'theta', 'color', ...specific].includes(k))) throw new Error(`The specified arguments are not supported for ${type}.`);
         if (selectedDirection && 'theta' in options) throw new Error('A direction and theta cannot be specified together.');
         if (type === 'Header' && selectedDirection && selectedDirection !== 'right') throw new Error('Header only supports the right direction.');
         const num = (key, fallback, integer = false, max = 100) => {
@@ -3687,11 +3693,12 @@
           return options[key] === 'True';
         };
         const anchors = { xy: [0, 0] }, shapes = [], texts = [], pinMarks = [];
-        let box, headerW = 0, headerH = 0;
+        let box, headerW = 0, headerH = 0, dipPins = 0;
         const path = d => shapes.push(`<path d="${d}" ${stroke}/>`);
         const text = (px, py, value, size, align = 'middle', baseline = 'central') => texts.push({ px, py, value, size, align, baseline });
         if (type === 'IcDIP') {
           const pins = num('pins', 8, true, 100), w = num('width', 3) * 36, pw = num('pinw', .6) * 36, space = num('spacing', .5) * 36;
+          dipPins = pins;
           if (pins % 2) throw new Error('IcDIP pins must be an even number.');
           const height = pins / 2 * pw + (pins / 2 + 1) * space;
           const notch = bool('notch', true), number = bool('number', true), fs = num('pfontsize', 10, false, 1000);
@@ -3804,6 +3811,72 @@
           bounds(tx-width, ty-t.size, tx+width, ty+t.size);
           if (t.baseline === 'ideographic') elements.push(`<text x="${tx}" y="${ty - t.size}" text-anchor="${t.align}" dominant-baseline="ideographic" fill="${color}" font-family="sans-serif" font-size="${t.size}"><tspan x="${tx}" dy="${t.size}">${t.value}</tspan></text>`);
           else elements.push(`<text x="${tx}" y="${ty}" text-anchor="${t.align}" dominant-baseline="central" fill="${color}" font-family="sans-serif" font-size="${t.size}">${t.value}</text>`);
+        }
+        // IcDIP pin-name labels, ported from Schemdraw's Element._place_label:
+        // the anchor is a pin (pN / pN_in) or box edge, alignment comes from
+        // which bbox edge the anchor sits on, and the default 0.1-unit offset
+        // is expanded exactly like _align_label's (halign, valign) table.
+        for (const label of dipLabels) {
+          const loc = label.loc == null ? 'top'
+            : ({ bot: 'bottom', B: 'bottom', lft: 'left', L: 'left', rgt: 'right', R: 'right', T: 'top' }[label.loc] || label.loc);
+          const [x0, y0, x1, y1] = box; // SVG-local: y0 is the top edge, y1 the bottom.
+          let ax, ay, halign, valign;
+          if (loc === 'center') {
+            ax = (x0 + x1) / 2; ay = (y0 + y1) / 2;
+            halign = 'center'; valign = 'center';
+          } else if (['top', 'bottom', 'left', 'right'].includes(loc)) {
+            ax = loc === 'left' ? x0 : loc === 'right' ? x1 : (x0 + x1) / 2;
+            ay = loc === 'top' ? y0 : loc === 'bottom' ? y1 : (y0 + y1) / 2;
+            halign = loc === 'left' ? 'right' : loc === 'right' ? 'left' : 'center';
+            valign = loc === 'top' ? 'bottom' : loc === 'bottom' ? 'top' : 'center';
+          } else if (Object.prototype.hasOwnProperty.call(anchors, loc)) {
+            [ax, ay] = anchors[loc];
+            // Schemdraw compares anchors to the bbox edges with abs_tol=.15 units.
+            const tol = .15 * 36;
+            halign = Math.abs(ax - x0) <= tol ? 'right' : Math.abs(ax - x1) <= tol ? 'left' : 'center';
+            valign = Math.abs(ay - y1) <= tol ? 'top' : Math.abs(ay - y0) <= tol ? 'bottom' : 'center';
+          } else {
+            throw new Error(`IcDIP label loc must be p1..p${dipPins}, p1_in..p${dipPins}_in, top, bottom, left, right, or center.`);
+          }
+          let ox, oy;
+          if (Array.isArray(label.ofst)) {
+            // `ofst=(x y)` is in element-local coordinates (positive y up).
+            [ox, oy] = label.ofst;
+          } else {
+            const pofst = label.ofst == null ? .1 : label.ofst;
+            // Schemdraw expands a numeric offset with the bbox-derived
+            // alignment, before any user halign/valign override.
+            ox = halign === 'right' ? -pofst : halign === 'left' ? pofst : 0;
+            oy = valign === 'bottom' ? pofst : valign === 'top' ? -pofst : 0;
+          }
+          halign = label.halign || halign;
+          valign = label.valign || valign;
+          const size = label.fontsize === undefined ? labelSize : label.fontsize;
+          const [lx, ly] = placed.transform(ax + ox * 36, ay - oy * 36);
+          const align = { left: 'start', center: 'middle', right: 'end' }[halign];
+          const baseline = valign === 'top' ? 'hanging' : valign === 'bottom' ? 'ideographic' : 'central';
+          const lines = String(label.text).split('\n');
+          const spans = lines.map(line => `<tspan x="${lx}" dy="${size}">${labelContent(line)}</tspan>`).join('');
+          // Schemdraw's text_tosvg: h = lines*fontsize, y = ytext - h, where
+          // center uses y + h/2 - size/2, top uses y + h - size, bottom uses y.
+          const h = lines.length * size;
+          const ytext = valign === 'center' ? ly + h / 2 - size / 2
+            : valign === 'top' ? ly + h - size : ly;
+          const yAttr = ytext - h;
+          // Optional label rotation (Schemdraw: rotate=True uses the element
+          // angle, keeps text upright for 90<theta<270; a number is absolute).
+          let rotation = 0;
+          if (label.rotate === true) {
+            rotation = ((theta % 360) + 360) % 360;
+            if (rotation > 90 && rotation < 270) rotation -= 180;
+          } else if (typeof label.rotate === 'number') {
+            rotation = ((label.rotate % 360) + 360) % 360;
+          }
+          const rotateAttr = rotation ? ` transform="rotate(${-rotation} ${lx} ${ly})"` : '';
+          const width = Math.max(size, Math.max(...lines.map(line => textWidth(labelContent(line), size))));
+          const bx = align === 'start' ? lx : align === 'end' ? lx - width : lx - width / 2;
+          bounds(bx, yAttr, bx + width, yAttr + (lines.length + 1) * size);
+          elements.push(`<text x="${lx}" y="${yAttr}" text-anchor="${align}" dominant-baseline="${baseline}"${rotateAttr}${label.color ? ` fill="${label.color}"` : textFill} font-family="sans-serif" font-size="${size}">${spans}</text>`);
         }
         // Header labels default to Schemdraw's 'top' location: 0.1 units
         // above the (possibly flipped) box, centred.
@@ -6417,14 +6490,19 @@
           if (/^@size(?:\s|$)/.test(line)) {
             if (size !== null) throw new Error('@size may only be specified once.');
             const rest = line.slice(5).trim();
-            if (!rest) throw new Error('@size requires one scale factor.');
-            let value = rest;
+            if (!rest) throw new Error('Invalid @size syntax: expected one scale factor.');
+            let value, remaining;
             if (rest.startsWith('"')) {
-              const match = /^"((?:[^"\\]|\\["\\])*)"$/.exec(rest);
-              if (!match) throw new Error('@size takes one scale factor for the whole SVG; per-circuit sizes are not supported.');
+              const match = /^"((?:[^"\\]|\\["\\])*)"(?:\s+|$)/.exec(rest);
+              if (!match) throw new Error('Invalid @size syntax: expected one scale factor.');
               value = match[1];
+              remaining = rest.slice(match[0].length).trim();
+            } else {
+              const match = /^(\S+)(?:\s+|$)/.exec(rest);
+              value = match[1];
+              remaining = rest.slice(match[0].length).trim();
             }
-            if (/\s/.test(value)) throw new Error('@size takes one scale factor for the whole SVG; per-circuit sizes are not supported.');
+            if (remaining) throw new Error('Invalid @size syntax: expected one scale factor.');
             if (!/^(?:\d+\.?\d*|\.\d+)$/.test(value)) throw new Error('@size scale must be a positive decimal number.');
             const scale = Number(value);
             if (!Number.isFinite(scale) || scale <= 0) throw new Error('@size scale must be a positive decimal number.');

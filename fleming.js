@@ -6378,7 +6378,7 @@
   function splitDocument(source) {
     if (typeof source !== 'string') throw new TypeError('source must be a string.');
     const circuits = [], subs = Object.create(null);
-    let lines = null, depth = 0, layout = null, titles = null, subName = null, subParams = [];
+    let lines = null, depth = 0, layout = null, titles = null, size = null, subName = null, subParams = [];
     for (const raw of source.split(/\r?\n/)) {
       const line = raw.trim();
       if (!line || line.startsWith('#')) {
@@ -6412,6 +6412,23 @@
               rest = rest.slice(match[0].length).trim();
             }
             if (!titles.length) throw new Error('@title requires at least one title.');
+            continue;
+          }
+          if (/^@size(?:\s|$)/.test(line)) {
+            if (size !== null) throw new Error('@size may only be specified once.');
+            const rest = line.slice(5).trim();
+            if (!rest) throw new Error('@size requires one scale factor.');
+            let value = rest;
+            if (rest.startsWith('"')) {
+              const match = /^"((?:[^"\\]|\\["\\])*)"$/.exec(rest);
+              if (!match) throw new Error('@size takes one scale factor for the whole SVG; per-circuit sizes are not supported.');
+              value = match[1];
+            }
+            if (/\s/.test(value)) throw new Error('@size takes one scale factor for the whole SVG; per-circuit sizes are not supported.');
+            if (!/^(?:\d+\.?\d*|\.\d+)$/.test(value)) throw new Error('@size scale must be a positive decimal number.');
+            const scale = Number(value);
+            if (!Number.isFinite(scale) || scale <= 0) throw new Error('@size scale must be a positive decimal number.');
+            size = scale;
             continue;
           }
           if (layout !== null) throw new Error('@layout may only be specified once.');
@@ -6454,10 +6471,10 @@
     }
     if (depth !== 0) throw new Error('Missing closing brace for a block.');
     if (!circuits.length) throw new Error('Specify at least one circuit block.');
-    return { circuits, layout, titles, subs };
+    return { circuits, layout, titles, size, subs };
   }
 
-  function svgSize(svg) {
+  function viewBoxSize(svg) {
     const match = /\bviewBox="([^"]+)"/.exec(svg);
     if (!match) throw new Error('Cannot read the viewBox from the circuit SVG.');
     const box = match[1].split(/\s+/).map(Number);
@@ -6465,20 +6482,62 @@
     return { width: box[2], height: box[3] };
   }
 
+  const round3 = value => Number(value.toFixed(3));
+
+  // Replace or insert attributes on the root <svg> tag. Replacing existing
+  // width/height attributes keeps the markup valid when an SVG is composed
+  // into a layout.
+  function setSvgAttributes(svg, attributes) {
+    const end = svg.indexOf('>');
+    if (end < 0) return svg;
+    let tag = svg.slice(0, end);
+    for (const name of Object.keys(attributes)) {
+      const value = attributes[name];
+      const pattern = new RegExp(`\\s${name}="[^"]*"`);
+      if (value === null) {
+        tag = tag.replace(pattern, '');
+      } else if (pattern.test(tag)) {
+        tag = tag.replace(pattern, ` ${name}="${value}"`);
+      } else {
+        tag = tag.replace(/^<svg\b/, `<svg ${name}="${value}"`);
+      }
+    }
+    return tag + svg.slice(end);
+  }
+
   // Compose outside the circuit viewport; the original SVG and its geometry
   // are unchanged. Reserve width for the title and height below the circuit.
   function addTitle(svg, title) {
     if (!title) return svg;
-    const { width: circuitWidth, height: circuitHeight } = svgSize(svg);
-    const width = Math.max(circuitWidth, Array.from(title).length * 16 + 16);
-    const height = circuitHeight + 30;
-    const x = (width - circuitWidth) / 2;
-    const inner = svg.replace('<svg ', `<svg x="${x}" y="0" width="${circuitWidth}" height="${circuitHeight}" `);
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Circuit diagram">${inner}<text x="${width / 2}" y="${circuitHeight + 24}" text-anchor="middle" font-family="sans-serif" font-size="14">${escapeText(title)}</text></svg>`;
+    const { width: circuitWidth, height: circuitHeight } = viewBoxSize(svg);
+    const width = round3(Math.max(circuitWidth, Array.from(title).length * 16 + 16));
+    const height = round3(circuitHeight + 30);
+    const x = round3((width - circuitWidth) / 2);
+    const inner = setSvgAttributes(svg, {
+      x: String(x), y: '0',
+      width: String(circuitWidth), height: String(circuitHeight),
+    });
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Circuit diagram">${inner}<text x="${round3(width / 2)}" y="${round3(circuitHeight + 24)}" text-anchor="middle" font-family="sans-serif" font-size="14">${escapeText(title)}</text></svg>`;
+  }
+
+  // @size scales the finished SVG as a whole. The viewBox stays unchanged, so
+  // every circuit, title, and gap scales by the same factor.
+  function applySize(svg, scale) {
+    if (!scale || scale === 1) return svg;
+    const { width, height } = viewBoxSize(svg);
+    // A single circuit already carries its size in points. A composed SVG
+    // (title or multiple circuits) uses unitless px for its children, so the
+    // scaled root stays unitless as well.
+    const root = /^<svg\b[^>]*>/.exec(svg);
+    const unit = root && /\swidth="[^"]*pt"/.test(root[0]) ? 'pt' : '';
+    return setSvgAttributes(svg, {
+      width: `${round3(width * scale)}${unit}`,
+      height: `${round3(height * scale)}${unit}`,
+    });
   }
 
   function render(source, log = () => {}) {
-    const { circuits, layout, titles, subs } = splitDocument(source);
+    const { circuits, layout, titles, size, subs } = splitDocument(source);
     let rows, cols;
     if (layout === null) {
       rows = circuits.length; cols = 1;
@@ -6492,10 +6551,12 @@
     const count = rows >= Math.ceil(circuits.length / cols) ? circuits.length : rows * cols;
     const selected = circuits.slice(0, count);
     // Preserve the pre-layout output exactly for a single untitled circuit.
-    if (selected.length === 1) return addTitle(renderCircuit(selected[0], log, subs), titles && titles[0]);
+    if (selected.length === 1) {
+      return applySize(addTitle(renderCircuit(selected[0], log, subs), titles && titles[0]), size);
+    }
     const children = selected.map((block, i) => {
       const svg = addTitle(renderCircuit(block, log, subs), titles && titles[i]);
-      return { svg, ...svgSize(svg) };
+      return { svg, ...viewBoxSize(svg) };
     });
     const usedCols = Math.min(cols, children.length);
     const usedRows = Math.ceil(children.length / usedCols);
@@ -6505,17 +6566,21 @@
       heights[Math.floor(i / usedCols)] = Math.max(heights[Math.floor(i / usedCols)], child.height);
     });
     const gap = 24;
-    const offsets = sizes => {
+    const offsets = lengths => {
       let total = 0;
-      const positions = sizes.map(size => { const start = total; total += size + gap; return start; });
+      const positions = lengths.map(length => { const start = total; total += length + gap; return start; });
       return { positions, total: total - gap };
     };
     const horizontal = offsets(widths), vertical = offsets(heights);
     const content = children.map((child, i) => {
       const x = horizontal.positions[i % usedCols], y = vertical.positions[Math.floor(i / usedCols)];
-      return child.svg.replace('<svg ', `<svg x="${x}" y="${y}" width="${child.width}" height="${child.height}" `);
+      return setSvgAttributes(child.svg, {
+        x: String(x), y: String(y),
+        width: String(child.width), height: String(child.height),
+      });
     }).join('');
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${horizontal.total} ${vertical.total}" role="img" aria-label="Circuit diagram">${content}</svg>`;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${round3(horizontal.total)}" height="${round3(vertical.total)}" viewBox="0 0 ${horizontal.total} ${vertical.total}" role="img" aria-label="Circuit diagram">${content}</svg>`;
+    return applySize(svg, size);
   }
 
   root.Fleming = Object.freeze({ render, referenceImages });

@@ -1842,7 +1842,8 @@
         if (Object.prototype.hasOwnProperty.call(mathSymbols, name)) return mathSymbols[name];
         throw new Error(`Unsupported math command in label: ${cmd}`);
       });
-      if (!/^(?:[A-Za-z0-9Ωμµ+ .,()\-−≤≥≠≈∞±∓×·÷°∠∫∑∏∂]|[\^_](?:\{[A-Za-z0-9+\-−]+\}|[A-Za-z0-9]))+$/.test(text)) {
+      // `=` is a plain character in Schemdraw's mathtext; do not add operator spacing.
+      if (!/^(?:[A-Za-z0-9Ωμµ+ .,()\-−≤≥≠≈∞±∓×·÷°∠∫∑∏∂=]|[\^_](?:\{[A-Za-z0-9+\-−=]+\}|[A-Za-z0-9]))+$/.test(text)) {
         throw new Error(`Unsupported math label: ${source}`);
       }
       // A script is either a braced group or a single character.

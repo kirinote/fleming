@@ -718,7 +718,10 @@
 
   // How far an element extends above / below its centreline. CurrentLabel
   // measures its offset from that edge, like Schemdraw's bbox-based placement.
-  function sideExtent(type) {
+  function sideExtent(type, options = null) {
+    // A line with an arrow head has a bbox expanded by arrowwidth (0.15 unit),
+    // which Schemdraw uses when placing its labels.
+    if (options && 'arrow' in options && (type === 'Line' || type === 'Wire')) return [5.4, 5.4];
     if (['Line', 'Wire', 'Gap', 'BusLine', 'DataBusLine'].includes(type)) return [0, 0];
     if (type === 'Inductor') return [4.5, 0];
     // Variable resistors carry an arrow whose bbox Schemdraw expands by
@@ -1816,8 +1819,15 @@
   };
   const mathSymbols = {
     pm: '±', mp: '∓', times: '×', cdot: '·', div: '÷', le: '≤', leq: '≤', ge: '≥', geq: '≥',
-    ne: '≠', neq: '≠', approx: '≈', infty: '∞', degree: '°', circ: '°', ang: '∠'
+    ne: '≠', neq: '≠', approx: '≈', infty: '∞', degree: '°', circ: '°', ang: '∠',
+    int: '∫', sum: '∑', prod: '∏', partial: '∂'
   };
+
+  // Unicode digits for numeric sub/superscripts, as in Schemdraw's
+  // svgtext.mathtextsvg. Other scripts are shifted with `dy`, because
+  // baseline-shift is ignored by Chromium-based renderers.
+  const superscriptDigits = { 0: '⁰', 1: '¹', 2: '²', 3: '³', 4: '⁴', 5: '⁵', 6: '⁶', 7: '⁷', 8: '⁸', 9: '⁹' };
+  const subscriptDigits = { 0: '₀', 1: '₁', 2: '₂', 3: '₃', 4: '₄', 5: '₅', 6: '₆', 7: '₇', 8: '₈', 9: '₉' };
 
   // Render `$...$`: sub/superscripts and a few Greek/symbol commands.
   function mathContent(math, source) {
@@ -1832,12 +1842,39 @@
         if (Object.prototype.hasOwnProperty.call(mathSymbols, name)) return mathSymbols[name];
         throw new Error(`Unsupported math command in label: ${cmd}`);
       });
-      if (!/^(?:[A-Za-z0-9Ωμµ+ .\-−≤≥≠≈∞±∓×·÷°∠]|[\^_](?:\{[A-Za-z0-9]+\}|[A-Za-z0-9]))+$/.test(text)) {
+      if (!/^(?:[A-Za-z0-9Ωμµ+ .,()\-−≤≥≠≈∞±∓×·÷°∠∫∑∏∂]|[\^_](?:\{[A-Za-z0-9+\-−]+\}|[A-Za-z0-9]))+$/.test(text)) {
         throw new Error(`Unsupported math label: ${source}`);
       }
-      return escapeText(text)
-        .replace(/([\^_])(?:\{([A-Za-z0-9]+)\}|([A-Za-z0-9]))/g,
-          (_, mark, a, b) => `<tspan baseline-shift="${mark === '^' ? 'super' : 'sub'}" font-size="70%">${a || b}</tspan>`);
+      // A script is either a braced group or a single character.
+      const script = (mark, content) => {
+        const table = mark === '^' ? superscriptDigits : subscriptDigits;
+        if (/^[0-9]+$/.test(content)) return [...content].map(c => table[c]).join('');
+        const up = mark === '^';
+        // dy is supported everywhere; the zero-width tspan restores the
+        // baseline so following text is not shifted as well.
+        return `<tspan dy="${up ? '-0.4em' : '0.3em'}" font-size="70%">${escapeText(content)}</tspan>`
+          + `<tspan dy="${up ? '0.4em' : '-0.3em'}">\u200b</tspan>`;
+      };
+      const isScript = i => (text[i] === '^' || text[i] === '_') && i + 1 < text.length;
+      let rendered = '';
+      for (let i = 0; i < text.length;) {
+        if (isScript(i)) {
+          if (text[i + 1] === '{') {
+            const end = text.indexOf('}', i + 2);
+            rendered += script(text[i], text.slice(i + 2, end));
+            i = end + 1;
+          } else {
+            rendered += script(text[i], text[i + 1]);
+            i += 2;
+          }
+          continue;
+        }
+        let end = i + 1;
+        while (end < text.length && !isScript(end)) end++;
+        rendered += escapeText(text.slice(i, end));
+        i = end;
+      }
+      return rendered;
     };
     while ((match = overline.exec(math))) {
       out += renderSegment(math.slice(last, match.index));
@@ -1899,6 +1936,281 @@
         .join('');
       return `<text ${attrs}>${spans}</text>`;
     });
+  }
+
+  // ---- Signal processing elements (schemdraw/dsp/dsp.py, flow.Box) --------
+  // The dsp module is not a separate registry in Schemdraw: its symbols are
+  // stand-alone glyphs with compass anchors. They are built here in drawing
+  // units with y up (Schemdraw's local frame) and emitted as SVG in pixels
+  // with y down, like the other single-point symbols.
+  const DSP_TYPES = new Set(['Box', 'Square', 'Circle', 'Sum', 'SumSigma', 'Mixer',
+    'Amp', 'OscillatorBox', 'Oscillator', 'Filter', 'Adc', 'Dac', 'Demod',
+    'Circulator', 'Isolator', 'VGA',
+    // dsp.Speaker is the single-piece speaker; `Speaker` is already taken by
+    // elements.Speaker (the two-terminal one), so the module name disambiguates.
+    'dsp_Speaker']);
+
+  // dsp._makesine(): 20 samples of -sin(x)/10 over [-pi, pi], mapped to
+  // x = 0.2 … 0.8.
+  const dspSine = linspace(-Math.PI, Math.PI, 20).map(t => [t / Math.PI * 0.3 + 0.5, -Math.sin(t) / 10]);
+
+  // Element._place_label for a stand-alone dsp symbol: the anchor is a point
+  // of the local bbox (or a named anchor), `ofst` is added in local
+  // coordinates, and the alignment comes from the rotated `rotalign` table.
+  function dspLabelPosition(label, spec, theta) {
+    const { bbox, anchors } = spec;
+    let loc = label.loc || spec.defaultLoc;
+    if (loc === 'bot') loc = 'bottom';
+    // Element._position_label keeps top/bottom and left/right on the same
+    // visual side for elements pointing down or left.
+    const degrees = ((theta % 360) + 360) % 360;
+    if (degrees > 90 && degrees <= 270) {
+      loc = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' }[loc] || loc;
+    }
+    const { xmin, ymin, xmax, ymax } = bbox;
+    const isAnchor = loc !== 'center' && Object.prototype.hasOwnProperty.call(anchors, loc);
+    let ax, ay, halign, valign;
+    if (loc === 'center') {
+      ax = (xmin + xmax) / 2; ay = (ymin + ymax) / 2;
+      halign = 'center'; valign = 'center';
+    } else if (isAnchor) {
+      [ax, ay] = anchors[loc];
+      // Anchor on an edge: align the text away from the element.
+      halign = Math.abs(ax - xmin) <= 0.15 ? 'right' : Math.abs(ax - xmax) <= 0.15 ? 'left' : 'center';
+      valign = Math.abs(ay - ymin) <= 0.15 ? 'top' : Math.abs(ay - ymax) <= 0.15 ? 'bottom' : 'center';
+    } else if (loc === 'top' || loc === 'bottom' || loc === 'left' || loc === 'right') {
+      if (loc === 'top') { ax = (xmin + xmax) / 2; ay = ymax; }
+      else if (loc === 'bottom') { ax = (xmin + xmax) / 2; ay = ymin; }
+      else if (loc === 'left') { ax = xmin; ay = (ymin + ymax) / 2; }
+      else { ax = xmax; ay = (ymin + ymax) / 2; }
+      const th = ((theta
+        + (loc === 'left' ? 90 : loc === 'bottom' ? 180 : loc === 'right' ? 270 : 0)) % 360 + 360) % 360;
+      [halign, valign] = [
+        ['center', 'bottom'], ['right', 'bottom'], ['right', 'center'], ['right', 'top'],
+        ['center', 'top'], ['left', 'top'], ['left', 'center'], ['left', 'bottom']
+      ][Math.round(th / 45) % 8];
+    } else {
+      throw new Error(`Unsupported label location: ${label.loc}`);
+    }
+    // Schemdraw keeps a scalar `ofst` as a distance away from the anchor side.
+    const ofst = label.ofst == null ? spec.defaultOfst : label.ofst;
+    let ox = 0, oy = 0;
+    if (Array.isArray(ofst)) { ox = ofst[0]; oy = ofst[1]; }
+    else if (loc === 'center') { ox = ofst; oy = ofst; }
+    else if (isAnchor) {
+      const p = ofst;
+      [ox, oy] = ({
+        'center-bottom': [0, p], 'right-bottom': [-p, p], 'right-center': [-p, 0],
+        'right-top': [-p, -p], 'center-top': [0, -p], 'left-top': [p, -p],
+        'left-center': [p, 0], 'left-bottom': [p, p]
+      }[`${halign}-${valign}`] || [0, p]);
+    } else {
+      ox = loc === 'left' ? -ofst : loc === 'right' ? ofst : 0;
+      oy = loc === 'bottom' ? -ofst : loc === 'top' ? ofst : 0;
+    }
+    return {
+      x: (ax + ox) * 36, y: -(ay + oy) * 36,
+      halign: label.halign || halign, valign: label.valign || valign
+    };
+  }
+
+  // Build one dsp symbol. Returns the body in local SVG pixels (y down), the
+  // glyph texts that Schemdraw stores as segments (they stay upright), the
+  // anchors in drawing units, the local bbox and the element defaults that
+  // Element._place uses (label location, drop point).
+  function buildDsp(type, options, fontSize, color) {
+    const U = 36;
+    // Drawables keep their insertion order: Schemdraw paints segments in the
+    // order they were appended, so a circle must not cover the glyph inside it.
+    const drawables = [], glyphs = [];
+    const anchors = Object.create(null);
+    let bbox = { xmin: 0, ymin: 0, xmax: 0, ymax: 0 };
+    let defaultLoc = 'center', defaultOfst = 0, dropPoint = null;
+    // Constructor arguments per element, as in dsp.py / flow.Box.
+    const allowed = ['at', 'anchor', 'theta', 'color', 'drop', 'hold', 'fill',
+      ...(type === 'Box' ? ['w', 'h', 'minsize', 'pad'] : []),
+      ...(['Circle', 'Sum', 'SumSigma', 'Mixer', 'Oscillator', 'Circulator'].includes(type) ? ['radius'] : []),
+      ...(type === 'Mixer' ? ['N', 'E', 'S', 'W', 'fontsize'] : []),
+      ...(type === 'Filter' ? ['response'] : []),
+      ...(type === 'VGA' ? ['tuneup'] : [])];
+    for (const key of Object.keys(options)) if (!allowed.includes(key)) throw new Error(`${type} does not support ${key}.`);
+    const num = (key, fallback, positive = false) => {
+      if (!(key in options)) return fallback;
+      const raw = options[key];
+      if (typeof raw !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(raw) || !Number.isFinite(Number(raw)) || (positive && !(Number(raw) > 0))) {
+        throw new Error(`${type} ${key} must be a ${positive ? 'positive ' : ''}number.`);
+      }
+      return Number(raw);
+    };
+    const bool = (key, fallback) => {
+      if (!(key in options)) return fallback;
+      if (!['True', 'False'].includes(options[key])) throw new Error(`${key} must be True or False.`);
+      return options[key] === 'True';
+    };
+    const path = (points, closed = false, lw = 2) => {
+      const d = points.map(([lx, ly], i) => `${i ? 'L' : 'M'} ${(lx * U).toFixed(4)},${(-ly * U).toFixed(4)}`).join(' ');
+      // Schemdraw can fill a segment only when its path repeats a point, so a
+      // closed outline is one whose first and last points coincide.
+      const last = points[points.length - 1];
+      const outline = closed || (points.length > 1 && points[0][0] === last[0] && points[0][1] === last[1]);
+      drawables.push({ kind: 'path', d: closed ? `${d} Z` : d, lw, closed: outline });
+    };
+    const text = (lx, ly, value, size = fontSize) => glyphs.push({ x: lx * U, y: -ly * U, value, size });
+    const circle = (cx, cy, r) => drawables.push({ kind: 'circle', cx: cx * U, cy: -cy * U, r: r * U });
+    // A segment with an arrow head, drawn like the SVG backend: the line stops
+    // one arrowlength (0.25 unit) before the end, the tip is 2 px short and the
+    // head is arrowwidth (0.15 unit) wide.
+    const arrowSeg = (a, b) => {
+      const ax = a[0] * U, ay = -a[1] * U, bx = b[0] * U, by = -b[1] * U;
+      const dx = bx - ax, dy = by - ay, len = Math.hypot(dx, dy) || 1;
+      const ux = dx / len, uy = dy / len;
+      const tipX = bx - 2 * ux, tipY = by - 2 * uy;
+      const baseX = bx - 9 * ux, baseY = by - 9 * uy;
+      const nx = -uy * 2.7, ny = ux * 2.7;
+      drawables.push({ kind: 'path', d: `M ${ax.toFixed(4)},${ay.toFixed(4)} L ${baseX.toFixed(4)},${baseY.toFixed(4)}`, lw: 2 });
+      drawables.push({
+        kind: 'path',
+        d: `M ${tipX.toFixed(4)},${tipY.toFixed(4)} L ${(baseX + nx).toFixed(4)},${(baseY + ny).toFixed(4)} L ${(baseX - nx).toFixed(4)},${(baseY - ny).toFixed(4)} Z`,
+        lw: 2, head: true
+      });
+    };
+    const squareBase = () => {
+      path([[0, 0], [0, 0.5], [1, 0.5], [1, -0.5], [0, -0.5], [0, 0]], true);
+      bbox = { xmin: 0, ymin: -0.5, xmax: 1, ymax: 0.5 };
+      Object.assign(anchors, { N: [0.5, 0.5], S: [0.5, -0.5], E: [1, 0], W: [0, 0] });
+      defaultLoc = 'center'; defaultOfst = 0;
+      dropPoint = [1, 0];
+    };
+    const circleBase = () => {
+      const r = num('radius', 0.5, true);
+      circle(r, 0, r);
+      bbox = { xmin: 0, ymin: -r, xmax: 2 * r, ymax: r };
+      const k = r * Math.SQRT2 / 2;
+      Object.assign(anchors, {
+        N: [r, r], S: [r, -r], E: [2 * r, 0], W: [0, 0],
+        NW: [r - k, k], NE: [r + k, k], SW: [r - k, -k], SE: [r + k, -k], center: [r, 0]
+      });
+      defaultLoc = 'center'; defaultOfst = 0;
+      dropPoint = [2 * r, 0];
+      return r;
+    };
+    const sine = (dy = 0) => path(dspSine.map(([x, y]) => [x, y + dy]));
+
+    if (type === 'Box') {
+      // `pad` is accepted for compatibility; it only feeds flow.labelsize(),
+      // which 0.23 never reaches (see below).
+      num('pad', 0.25);
+      let minsize = [3, 2];
+      if ('minsize' in options) {
+        const m = /^\(\s*(\d+(?:\.\d+)?|\.\d+)\s+(\d+(?:\.\d+)?|\.\d+)\s*\)$/.exec(String(options.minsize));
+        if (!m) throw new Error('Box minsize must be specified as "(width height)".');
+        minsize = [Number(m[1]), Number(m[2])];
+      }
+      // Schemdraw's flow.Box calls _set_size() before the labels exist, so a
+      // Box is always w x h = minsize unless w/h are given; the label does not
+      // grow it in 0.23.
+      const w = num('w', minsize[0], true), h = num('h', minsize[1], true);
+      path([[0, 0], [0, h / 2], [w, h / 2], [w, -h / 2], [0, -h / 2], [0, 0]], true);
+      bbox = { xmin: 0, ymin: -h / 2, xmax: w, ymax: h / 2 };
+      Object.assign(anchors, {
+        center: [w / 2, 0], N: [w / 2, h / 2], E: [w, 0], S: [w / 2, -h / 2], W: [0, 0],
+        NW: [0, h / 2], NE: [w, h / 2], SW: [0, -h / 2], SE: [w, -h / 2],
+        NNE: [3 * w / 4, h / 2], NNW: [w / 4, h / 2], SSE: [3 * w / 4, -h / 2], SSW: [w / 4, -h / 2],
+        ENE: [w, h / 3], ESE: [w, -h / 3], WNW: [0, h / 3], WSW: [0, -h / 3]
+      });
+      defaultLoc = 'center'; defaultOfst = 0;
+    } else if (type === 'Square' || type === 'OscillatorBox' || type === 'Filter' || type === 'Demod' || type === 'Isolator') {
+      squareBase();
+      if (type === 'OscillatorBox') sine();
+      else if (type === 'Filter') {
+        sine(); sine(0.25); sine(-0.25);
+        const response = 'response' in options ? String(options.response) : '';
+        if (response && !['lp', 'bp', 'hp', 'notch'].includes(response)) throw new Error('Filter response must be lp, bp, hp, or notch.');
+        if (['bp', 'lp'].includes(response)) path([[0.45, 0.17], [0.55, 0.33]]);
+        if (['bp', 'hp'].includes(response)) path([[0.45, -0.33], [0.55, -0.17]]);
+        if (['lp', 'hp', 'notch'].includes(response)) path([[0.45, -0.08], [0.55, 0.08]]);
+      } else if (type === 'Demod') {
+        path([[0.15, 0], [0.3, 0]]);
+        path([[0.3, 0.25], [0.7, 0], [0.3, -0.25], [0.3, 0.25]]);
+        path([[0.7, 0.25], [0.7, -0.25]]);
+        path([[0.7, 0], [0.85, 0]]);
+      } else if (type === 'Isolator') {
+        arrowSeg([0.25, 0], [0.75, 0]);
+      }
+    } else if (type === 'Circle' || type === 'Sum' || type === 'SumSigma' || type === 'Mixer' || type === 'Oscillator' || type === 'Circulator') {
+      const r = circleBase();
+      if (type === 'Sum') {
+        // dsp.Sum draws the plus at fixed 0.5-based coordinates.
+        path([[0.5, 0.2], [0.5, -0.2]]);
+        path([[0.3, 0], [0.7, 0]]);
+      } else if (type === 'SumSigma') {
+        // SegmentText(r'$\Sigma$', pos=(0.45, 0), align=('center','center'))
+        text(0.45, 0, 'Σ');
+      } else if (type === 'Mixer') {
+        const k = 0.5 * Math.SQRT2 / 2;
+        path([[0.5 + k, k], [0.5 - k, -k]], false, 1);
+        path([[0.5 + k, -k], [0.5 - k, k]], false, 1);
+        defaultLoc = 'top'; defaultOfst = 0.2;
+        const mixSize = num('fontsize', 10, true);
+        const textArg = key => {
+          const raw = options[key];
+          if (typeof raw !== 'string') throw new Error(`Mixer ${key} must be a string.`);
+          const quoted = /^'((?:[^'\\]|\\.)*)'$/.exec(raw);
+          return quoted ? quoted[1].replace(/\\(['\\n])/g, (m, c) => c === 'n' ? '\n' : c) : raw;
+        };
+        if ('N' in options) text(0.5, 0.25 + 0.01, textArg('N'), mixSize);
+        if ('S' in options) text(0.5, -0.25 - 0.065, textArg('S'), mixSize);
+        if ('E' in options) text(0.75 + 0.05, 0, textArg('E'), mixSize);
+        if ('W' in options) text(0.25 - 0.05, 0, textArg('W'), mixSize);
+      } else if (type === 'Oscillator') {
+        sine();
+      } else if (type === 'Circulator') {
+        // SegmentArc((0.5, 0), 0.9*radius, 0.9*radius, 20, 200, 'cw')
+        drawables.push({ kind: 'arc', d: switchArc(0.5, 0, 0.9 * r, 0.9 * r, 20, 200, 'cw', color) });
+      }
+    } else if (type === 'Amp' || type === 'VGA') {
+      path([[0, 0], [0, -0.5], [0.75, 0], [0, 0.5], [0, 0]], true);
+      bbox = { xmin: 0, ymin: -0.5, xmax: 0.75, ymax: 0.5 };
+      anchors.input = [0, 0]; anchors.out = [0.75, 0];
+      defaultLoc = 'top'; defaultOfst = 0.1;
+      dropPoint = [0.75, 0];
+      if (type === 'VGA') {
+        const tuneup = bool('tuneup', true);
+        arrowSeg([-0.1, -0.5], [0.75, 0.5]);
+        anchors.tune = [0.325, tuneup ? 0.5 : -0.5];
+        bbox = { xmin: -0.1, ymin: -0.65, xmax: 0.75, ymax: 0.65 };
+      }
+    } else if (type === 'dsp_Speaker') {
+      // dsp.Speaker: a box with a cone and no anchors, so it never moves the
+      // drawing position. Both outlines repeat their first point (fillable).
+      path([[0, 0], [0, 0.25], [0.25, 0.25], [0.25, -0.25], [0, -0.25], [0, 0]], true);
+      path([[0.25, 0.25], [0.5, 0.5], [0.5, -0.5], [0.25, -0.25], [0.25, 0.25]], true);
+      bbox = { xmin: 0, ymin: -0.5, xmax: 0.5, ymax: 0.5 };
+      defaultLoc = 'top'; defaultOfst = 0.1;
+    } else if (type === 'Adc' || type === 'Dac') {
+      if (type === 'Adc') path([[0, 0], [0.22, 0.5], [1.4, 0.5], [1.4, -0.5], [0.22, -0.5], [0, 0]], true);
+      else path([[0, 0], [0, 0.5], [1.18, 0.5], [1.4, 0], [1.18, -0.5], [0, -0.5], [0, 0]], true);
+      bbox = { xmin: 0, ymin: -0.5, xmax: 1.4, ymax: 0.5 };
+      anchors.input = [0, 0]; anchors.out = [1.4, 0];
+      anchors.E = [1.4, 0]; anchors.W = [0, 0];
+      defaultLoc = 'center'; defaultOfst = 0;
+      dropPoint = [1.4, 0];
+    }
+    // Schemdraw's Element.fill(): the colour is the style default for every
+    // segment of the element, so closed paths (boxes, triangles, circles) are
+    // filled with it; arrow heads keep the element colour.
+    const fillColor = 'fill' in options ? (options.fill === 'True' ? color : readColor(options.fill)) : 'none';
+    const body = drawables.map(item => {
+      if (item.kind === 'circle') {
+        return `<circle cx="${item.cx}" cy="${item.cy}" r="${item.r}" fill="${fillColor}" stroke="${color}" stroke-width="2"/>`;
+      }
+      if (item.head) return `<path d="${item.d}" fill="${color}"/>`;
+      if (item.kind === 'arc') return item.d;
+      // Schemdraw fills a segment only when its path repeats a point (a closed
+      // outline); open paths such as the filter curves stay unfilled.
+      return `<path d="${item.d}" fill="${item.closed ? fillColor : 'none'}" stroke="${color}" stroke-width="${item.lw}" stroke-linecap="round" stroke-linejoin="round"/>`;
+    }).join('');
+    return { body, glyphs, anchors, bbox, defaultLoc, defaultOfst, dropPoint };
   }
 
   function renderCircuit(source, log = () => {}, subs = null) {
@@ -2068,7 +2380,7 @@
         continue;
       }
       const previousState = [x, y, direction];
-      if (!record.sub && !['Resistor', 'ResistorIEEE', 'ResistorIEC', 'ResistorVar', 'ResistorVarIEC', 'ResistorVarIEEE', 'Capacitor', 'Capacitor2', 'Inductor', 'Inductor2', 'CPE', 'Nullator', 'Norator', 'Diode', 'DiodeTunnel', 'DiodeTVS', 'DiodeShockley', 'Josephson', 'Zener', 'LED', 'Diac', 'Schottky', 'Varactor', 'Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE', 'Rshunt', 'SCR', 'Triac', 'Fuse', 'FuseIEC', 'FuseIEEE', 'RBox', 'Thermistor', 'Crystal', 'CapacitorVar', 'CapacitorTrim', 'Photoresistor', 'PhotoresistorBox', 'PhotoresistorIEC', 'PhotoresistorIEEE', 'Coax', 'Triax', 'Motor', 'BusLine', 'DataBusLine', 'BusConnect', 'CoaxConnect', 'Plug', 'Jack', 'Terminal', 'Jumper', 'DE9', 'DB25', 'DA15', 'DC37', 'DD50', 'Switch', 'Button', 'SwitchSpdt', 'SwitchSpdt2', 'SwitchDpst', 'SwitchDpdt', 'SwitchRotary', 'SwitchDIP', 'SwitchReed', 'Battery', 'BatteryCell', 'BatteryDouble', 'Line', 'Wire', 'OrthoLines', 'Dot', 'Source', 'SourceSin', 'SourceV', 'SourceI', 'SourcePulse', 'SourceSquare', 'SourceTriangle', 'SourceRamp', 'Lamp', 'Lamp2', 'Solar', 'Neon', 'Photodiode', 'LED2', 'FuseUS', 'Memristor', 'Memristor2', 'SparkGap', 'MeterV', 'MeterA', 'MeterI', 'MeterOhm', 'MeterArrow', 'SourceControlled', 'SourceControlledV', 'SourceControlledI', 'Gap', 'Breaker', 'Optocoupler', 'Relay', 'Opamp', 'Ground', 'GroundSignal', 'GroundChassis', 'Vdd', 'Vss', 'NoConnect', 'Antenna', 'AntennaLoop', 'AntennaLoop2', 'Speaker', 'Mic', 'AudioJack', "OutletA","OutletB","OutletC","OutletD","OutletE","OutletF","OutletG","OutletH","OutletI","OutletJ","OutletK","OutletL", 'Arrowhead', 'DotDotDot', 'Label', 'Tag', 'Bjt', 'JFet', 'Hemt', 'NpnSchottky', 'PnpSchottky', 'BjtNpn', 'BjtPnp', 'BjtPnp2c', 'BjtNpn2', 'BjtPnp2', 'BjtPnp2c2', 'IgbtN', 'IgbtP', 'NpnPhoto', 'PnpPhoto', 'AnalogNFet', 'AnalogPFet', 'AnalogBiasedFet', 'NMos2', 'PMos2', 'NFet2', 'PFet2', 'JFetN2', 'JFetP2', 'JFetN', 'JFetP', 'NFet', 'PFet', 'NMos', 'PMos', 'CurrentMirror', 'VoltageMirror', 'Ic', 'Multiplexer', 'VoltageRegulator', 'DFlipFlop', 'JKFlipFlop', 'Ic555', 'SevenSegment', 'MeterBox', 'MeterAnalog', 'MeterDigital', 'Oscilloscope', 'IcDIP', 'Header', 'Transformer', 'LoopCurrent', 'CurrentLabel', 'CurrentLabelInline', 'Rectifier', 'Triode', 'DualVacuumTube', 'Nullor', 'VoltageTransactor', 'TransimpedanceTransactor', 'CurrentTransactor', 'TransadmittanceTransactor', ...logicGateTypes].includes(type)) throw new Error(`Unsupported component: ${type}`);
+      if (!record.sub && !['Resistor', 'ResistorIEEE', 'ResistorIEC', 'ResistorVar', 'ResistorVarIEC', 'ResistorVarIEEE', 'Capacitor', 'Capacitor2', 'Inductor', 'Inductor2', 'CPE', 'Nullator', 'Norator', 'Diode', 'DiodeTunnel', 'DiodeTVS', 'DiodeShockley', 'Josephson', 'Zener', 'LED', 'Diac', 'Schottky', 'Varactor', 'Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE', 'Rshunt', 'SCR', 'Triac', 'Fuse', 'FuseIEC', 'FuseIEEE', 'RBox', 'Thermistor', 'Crystal', 'CapacitorVar', 'CapacitorTrim', 'Photoresistor', 'PhotoresistorBox', 'PhotoresistorIEC', 'PhotoresistorIEEE', 'Coax', 'Triax', 'Motor', 'BusLine', 'DataBusLine', 'BusConnect', 'CoaxConnect', 'Plug', 'Jack', 'Terminal', 'Jumper', 'DE9', 'DB25', 'DA15', 'DC37', 'DD50', 'Switch', 'Button', 'SwitchSpdt', 'SwitchSpdt2', 'SwitchDpst', 'SwitchDpdt', 'SwitchRotary', 'SwitchDIP', 'SwitchReed', 'Battery', 'BatteryCell', 'BatteryDouble', 'Line', 'Wire', 'OrthoLines', 'Dot', 'Source', 'SourceSin', 'SourceV', 'SourceI', 'SourcePulse', 'SourceSquare', 'SourceTriangle', 'SourceRamp', 'Lamp', 'Lamp2', 'Solar', 'Neon', 'Photodiode', 'LED2', 'FuseUS', 'Memristor', 'Memristor2', 'SparkGap', 'MeterV', 'MeterA', 'MeterI', 'MeterOhm', 'MeterArrow', 'SourceControlled', 'SourceControlledV', 'SourceControlledI', 'Gap', 'Breaker', 'Optocoupler', 'Relay', 'Opamp', 'Ground', 'GroundSignal', 'GroundChassis', 'Vdd', 'Vss', 'NoConnect', 'Antenna', 'AntennaLoop', 'AntennaLoop2', 'Speaker', 'Mic', 'AudioJack', "OutletA","OutletB","OutletC","OutletD","OutletE","OutletF","OutletG","OutletH","OutletI","OutletJ","OutletK","OutletL", 'Arrowhead', 'DotDotDot', 'Label', 'Tag', 'Bjt', 'JFet', 'Hemt', 'NpnSchottky', 'PnpSchottky', 'BjtNpn', 'BjtPnp', 'BjtPnp2c', 'BjtNpn2', 'BjtPnp2', 'BjtPnp2c2', 'IgbtN', 'IgbtP', 'NpnPhoto', 'PnpPhoto', 'AnalogNFet', 'AnalogPFet', 'AnalogBiasedFet', 'NMos2', 'PMos2', 'NFet2', 'PFet2', 'JFetN2', 'JFetP2', 'JFetN', 'JFetP', 'NFet', 'PFet', 'NMos', 'PMos', 'CurrentMirror', 'VoltageMirror', 'Ic', 'Multiplexer', 'VoltageRegulator', 'DFlipFlop', 'JKFlipFlop', 'Ic555', 'SevenSegment', 'MeterBox', 'MeterAnalog', 'MeterDigital', 'Oscilloscope', 'IcDIP', 'Header', 'Transformer', 'LoopCurrent', 'CurrentLabel', 'CurrentLabelInline', 'Rectifier', 'Triode', 'DualVacuumTube', 'Nullor', 'VoltageTransactor', 'TransimpedanceTransactor', 'CurrentTransactor', 'TransadmittanceTransactor', 'Box', 'Square', 'Circle', 'Sum', 'SumSigma', 'Mixer', 'Amp', 'OscillatorBox', 'Oscillator', 'Filter', 'Adc', 'Dac', 'Demod', 'Circulator', 'Isolator', 'VGA', 'dsp_Speaker', ...logicGateTypes].includes(type)) throw new Error(`Unsupported component: ${type}`);
       const isMeter = ['MeterBox', 'MeterAnalog', 'MeterDigital', 'Oscilloscope'].includes(type);
       const isSource = ['Source', 'SourceV', 'SourceSin', 'SourceI', 'SourcePulse', 'SourceSquare', 'SourceTriangle', 'SourceRamp', 'Lamp', 'Lamp2', 'Solar', 'Neon', 'MeterV', 'MeterA', 'MeterI', 'MeterOhm', 'MeterArrow', 'SourceControlled', 'SourceControlledV', 'SourceControlledI', 'Solar', 'Neon'].includes(type);
       if (name && Object.prototype.hasOwnProperty.call(names, name)) throw new Error(`Duplicate component name: ${name}`);
@@ -2088,7 +2400,7 @@
           if (!options.side) options.side = [];
           options.side.push(value);
         } else {
-          if (!record.sub && !['at', 'to', 'tox', 'toy', 'endpoints', 'anchor', 'theta', 'color', 'drop', 'shift', 'scale', 'tap_length', 'idot', 'dot', 'leads', 'lead', 'hold', 'flip', 'reverse', 'length', 'shape', 'k', 'arrow', 'delta', 'dx', 'dy', 'size', 'pin', 'side', 'preclr', 'preclrinvert', 'slant', 'pinspacing', 'demux', 'decimal', 'digit', 'segcolor', 'tilt', 'labelsegments', 'anode', 'cathode', 'needle_percent', 'window_fill', 'input_fill', 'signal', 'signal_color', 'signal_lw', 'grid', ...(['IcDIP', 'Header', 'Transformer'].includes(type) ? ['pins', 'notch', 'width', 'pinw', 'spacing', 'number', 'pfontsize', 'rows', 'cols', 'style', 'numbering', 'shownumber', 'pinspacing', 'edge', 'pinfill', 't1', 't2', 'core', 'loop', 'align', 'pinsleft', 'pinsright', 'pinalignleft', 'pinalignright', 'pinfontsizeleft', 'pinfontsizeright'] : []), ...(['NFet2', 'PFet2', 'NFet', 'PFet'].includes(type) ? ['bulk'] : []), ...(['JFetN2', 'JFetP2'].includes(type) ? ['circle'] : []), ...(['AnalogNFet', 'AnalogPFet', 'AnalogBiasedFet'].includes(type) ? ['bulk', 'offset_gate', 'source_arrow'] : []), ...(type === 'Breaker' ? ['dots'] : []), ...(type === 'Optocoupler' ? ['box', 'boxfill', 'boxpad', 'base'] : []), ...(type === 'Relay' ? ['switch', 'core', 'link', 'box', 'boxfill', 'boxpad', 'swreverse', 'swflip', 'unit', 'cycl'] : []), ...(type === 'Inductor2' ? ['loops', 'core'] : []), ...(type === 'Capacitor2' ? ['polar'] : []), ...(type === 'Josephson' ? ['box'] : []), ...(type === 'Coax' ? ['radius', 'leadlen'] : []), ...(type === 'Triax' ? ['radiusinner', 'radiusouter', 'leadlen', 'shieldofststart', 'shieldofstend'] : []), ...(type === 'BusLine' ? ['lw'] : []), ...(type === 'BusConnect' ? ['n', 'slant_up', 'dy', 'lwbus', 'l'] : []), ...(type === 'CoaxConnect' ? ['radius', 'radiusinner', 'fillinner'] : []), ...(type === 'Terminal' ? ['r', 'open'] : []), ...(type === 'Jumper' ? ['pinspacing'] : []), ...(['DE9', 'DB25', 'DA15', 'DC37', 'DD50'].includes(type) ? ['pinspacing', 'edge', 'number', 'pinfill'] : []), ...(['MeterBox', 'MeterAnalog', 'MeterDigital', 'Oscilloscope'].includes(type) ? ['width', 'corner', 'inputs', 'input_ofst', 'input_lw', 'input_rad'] : []), ...(type === 'MeterAnalog' ? ['needle_color', 'needle_width'] : []), ...(['MeterDigital', 'Oscilloscope'].includes(type) ? ['screen_fill', 'screen_lw'] : []), ...(type === 'Oscilloscope' ? ['grid_color', 'grid_lw'] : []), ...(logicMultiInputTypes.has(type) ? ['inputs', 'inputnots', 'leadin', 'leadout'] : []), ...(type === 'Tristate' ? ['outputnot', 'controlnot'] : []), ...(type === 'Ic' ? ['plblofst', 'botlabel'] : []), ...(type === 'OrthoLines' ? ['n', 'dy', 'xstart'] : []), ...(type === 'Capacitor' ? ['polar'] : []), ...(type === 'Inductor' ? ['core'] : []), ...(['Diode', 'LED'].includes(type) ? ['fill'] : []), ...(type === 'Dot' ? ['open'] : []), ...(type === 'Opamp' ? ['sign'] : []), ...(type === 'Button' ? ['nc', 'contacts'] : []), ...(['NMos', 'PMos', 'NMos2', 'PMos2'].includes(type) ? ['diode'] : []), ...(['NFet', 'PFet'].includes(type) ? ['bulk'] : []), ...(['Switch', 'SwitchSpdt', 'SwitchSpdt2'].includes(type) ? ['contacts', 'nc', 'action'] : []), ...(type === 'SwitchRotary' ? ['n', 'dtheta', 'theta0', 'radius', 'arrowlen', 'arrowcontact'] : []), ...(type === 'SwitchDIP' ? ['n', 'pattern', 'switchcolor', 'swidth', 'spacing'] : []), ...(['SwitchDpst', 'SwitchDpdt'].includes(type) ? ['contacts', 'link'] : []), ...(['Bjt', 'JFet', 'NpnSchottky', 'PnpSchottky', 'BjtNpn', 'BjtPnp', 'BjtPnp2c', 'JFetN', 'JFetP', 'NMos', 'PMos', 'NMos2', 'PMos2'].includes(type) ? ['circle'] : []), ...(type === 'Hemt' ? ['split', 'source_arrow'] : []), ...(type === 'AudioJack' ? ['ring', 'switch', 'ringswitch', 'dots', 'open', 'radius'] : []), ...(/^Outlet[A-L]$/.test(type) ? ['plug'] : []), ...(type === 'Arrowhead' ? ['headwidth', 'headlength'] : []), ...(type === 'DotDotDot' ? ['radius', 'open'] : []), ...(type === 'Tag' ? ['width', 'height'] : []), ...(type === 'Arrow' ? ['double'] : []), ...(type === 'LoopCurrent' ? ['elms', 'pad', 'direction', 'theta1', 'theta2'] : []), ...(type === 'CurrentLabel' ? ['top', 'ofst', 'headlength', 'headwidth'] : []), ...(type === 'CurrentLabelInline' ? ['direction', 'start', 'ofst', 'headlength', 'headwidth'] : []), ...(['Nullor', 'VoltageTransactor', 'TransimpedanceTransactor', 'CurrentTransactor', 'TransadmittanceTransactor'].includes(type) ? ['reverse_output'] : []), ...(type === 'Triode' ? ['heater', 'split'] : []), ...(type === 'DualVacuumTube' ? ['grids_left', 'grids_right', 'heater', 'cathode', 'anodetype'] : [])].includes(key)) throw new Error(`Unsupported argument: ${key}`);
+          if (!record.sub && !['at', 'to', 'tox', 'toy', 'endpoints', 'anchor', 'theta', 'color', 'drop', 'shift', 'scale', 'tap_length', 'idot', 'dot', 'leads', 'lead', 'hold', 'flip', 'reverse', 'length', 'shape', 'k', 'arrow', 'delta', 'dx', 'dy', 'size', 'pin', 'side', 'preclr', 'preclrinvert', 'slant', 'pinspacing', 'demux', 'decimal', 'digit', 'segcolor', 'tilt', 'labelsegments', 'anode', 'cathode', 'needle_percent', 'window_fill', 'input_fill', 'signal', 'signal_color', 'signal_lw', 'grid', ...(DSP_TYPES.has(type) ? ['w', 'h', 'minsize', 'pad', 'radius', 'response', 'tuneup', 'N', 'E', 'S', 'W', 'fill'] : []), ...(['IcDIP', 'Header', 'Transformer'].includes(type) ? ['pins', 'notch', 'width', 'pinw', 'spacing', 'number', 'pfontsize', 'rows', 'cols', 'style', 'numbering', 'shownumber', 'pinspacing', 'edge', 'pinfill', 't1', 't2', 'core', 'loop', 'align', 'pinsleft', 'pinsright', 'pinalignleft', 'pinalignright', 'pinfontsizeleft', 'pinfontsizeright'] : []), ...(['NFet2', 'PFet2', 'NFet', 'PFet'].includes(type) ? ['bulk'] : []), ...(['JFetN2', 'JFetP2'].includes(type) ? ['circle'] : []), ...(['AnalogNFet', 'AnalogPFet', 'AnalogBiasedFet'].includes(type) ? ['bulk', 'offset_gate', 'source_arrow'] : []), ...(type === 'Breaker' ? ['dots'] : []), ...(type === 'Optocoupler' ? ['box', 'boxfill', 'boxpad', 'base'] : []), ...(type === 'Relay' ? ['switch', 'core', 'link', 'box', 'boxfill', 'boxpad', 'swreverse', 'swflip', 'unit', 'cycl'] : []), ...(type === 'Inductor2' ? ['loops', 'core'] : []), ...(type === 'Capacitor2' ? ['polar'] : []), ...(type === 'Josephson' ? ['box'] : []), ...(type === 'Coax' ? ['radius', 'leadlen'] : []), ...(type === 'Triax' ? ['radiusinner', 'radiusouter', 'leadlen', 'shieldofststart', 'shieldofstend'] : []), ...(type === 'BusLine' ? ['lw'] : []), ...(type === 'BusConnect' ? ['n', 'slant_up', 'dy', 'lwbus', 'l'] : []), ...(type === 'CoaxConnect' ? ['radius', 'radiusinner', 'fillinner'] : []), ...(type === 'Terminal' ? ['r', 'open'] : []), ...(type === 'Jumper' ? ['pinspacing'] : []), ...(['DE9', 'DB25', 'DA15', 'DC37', 'DD50'].includes(type) ? ['pinspacing', 'edge', 'number', 'pinfill'] : []), ...(['MeterBox', 'MeterAnalog', 'MeterDigital', 'Oscilloscope'].includes(type) ? ['width', 'corner', 'inputs', 'input_ofst', 'input_lw', 'input_rad'] : []), ...(type === 'MeterAnalog' ? ['needle_color', 'needle_width'] : []), ...(['MeterDigital', 'Oscilloscope'].includes(type) ? ['screen_fill', 'screen_lw'] : []), ...(type === 'Oscilloscope' ? ['grid_color', 'grid_lw'] : []), ...(logicMultiInputTypes.has(type) ? ['inputs', 'inputnots', 'leadin', 'leadout'] : []), ...(type === 'Tristate' ? ['outputnot', 'controlnot'] : []), ...(type === 'Ic' ? ['plblofst', 'botlabel'] : []), ...(type === 'OrthoLines' ? ['n', 'dy', 'xstart'] : []), ...(type === 'Capacitor' ? ['polar'] : []), ...(type === 'Inductor' ? ['core'] : []), ...(['Diode', 'LED'].includes(type) ? ['fill'] : []), ...(type === 'Dot' ? ['open'] : []), ...(type === 'Opamp' ? ['sign'] : []), ...(type === 'Button' ? ['nc', 'contacts'] : []), ...(['NMos', 'PMos', 'NMos2', 'PMos2'].includes(type) ? ['diode'] : []), ...(['NFet', 'PFet'].includes(type) ? ['bulk'] : []), ...(['Switch', 'SwitchSpdt', 'SwitchSpdt2'].includes(type) ? ['contacts', 'nc', 'action'] : []), ...(type === 'SwitchRotary' ? ['n', 'dtheta', 'theta0', 'radius', 'arrowlen', 'arrowcontact'] : []), ...(type === 'SwitchDIP' ? ['n', 'pattern', 'switchcolor', 'swidth', 'spacing'] : []), ...(['SwitchDpst', 'SwitchDpdt'].includes(type) ? ['contacts', 'link'] : []), ...(['Bjt', 'JFet', 'NpnSchottky', 'PnpSchottky', 'BjtNpn', 'BjtPnp', 'BjtPnp2c', 'JFetN', 'JFetP', 'NMos', 'PMos', 'NMos2', 'PMos2'].includes(type) ? ['circle'] : []), ...(type === 'Hemt' ? ['split', 'source_arrow'] : []), ...(type === 'AudioJack' ? ['ring', 'switch', 'ringswitch', 'dots', 'open', 'radius'] : []), ...(/^Outlet[A-L]$/.test(type) ? ['plug'] : []), ...(type === 'Arrowhead' ? ['headwidth', 'headlength'] : []), ...(type === 'DotDotDot' ? ['radius', 'open'] : []), ...(type === 'Tag' ? ['width', 'height'] : []), ...(type === 'Arrow' ? ['double'] : []), ...(type === 'LoopCurrent' ? ['elms', 'pad', 'direction', 'theta1', 'theta2'] : []), ...(type === 'CurrentLabel' ? ['top', 'ofst', 'headlength', 'headwidth'] : []), ...(type === 'CurrentLabelInline' ? ['direction', 'start', 'ofst', 'headlength', 'headwidth'] : []), ...(['Nullor', 'VoltageTransactor', 'TransimpedanceTransactor', 'CurrentTransactor', 'TransadmittanceTransactor'].includes(type) ? ['reverse_output'] : []), ...(type === 'Triode' ? ['heater', 'split'] : []), ...(type === 'DualVacuumTube' ? ['grids_left', 'grids_right', 'heater', 'cathode', 'anodetype'] : [])].includes(key)) throw new Error(`Unsupported argument: ${key}`);
           if (Object.prototype.hasOwnProperty.call(options, key)) throw new Error(`Duplicate argument: ${key}`);
           options[key] = value === undefined ? true : value;
         }
@@ -2167,7 +2479,7 @@
         log(`Subcircuit ${type}: ${'at' in options ? 'at=' + options.at : 'sequential'}`);
         continue;
       }
-      const labelStyleAllowed = label => type === 'Opamp' || type === 'IcDIP' || (type === 'Header' && label.color === undefined);
+      const labelStyleAllowed = label => type === 'Opamp' || type === 'IcDIP' || DSP_TYPES.has(type) || (type === 'Header' && label.color === undefined);
       if (!isMeter && (labels.some(label => (!labelStyleAllowed(label) && (label.fontsize !== undefined || label.color !== undefined)) || (!logicGateTypes.has(type) && type !== 'Opamp' && ['name', 'in1', 'in2', 'display'].includes(label.loc))) || ['needle_percent', 'window_fill', 'input_fill', 'signal', 'signal_color', 'signal_lw', 'grid'].some(key => key in options))) throw new Error(`The specified arguments are not supported for ${type}.`);
       if (type !== 'Wire' && (['shape', 'k'].some(key => key in options) || (type !== 'Line' && 'arrow' in options))) throw new Error(`Wire arguments cannot be used with ${type}.`);
       if (type === 'Line' && 'arrow' in options && !['->', '<-', '<->', '|->', '|-o', 'o-', '-o', 'o-o'].includes(options.arrow)) throw new Error('Invalid Line arrow.');
@@ -3018,14 +3330,16 @@
           ? (flip ? `translate(${W} 0) scale(-1 -1)` : `translate(${W} 0) scale(-1 1)`)
           : (flip ? 'scale(1 -1)' : '');
         let body = mirror ? `<g transform="${mirror}">${geometry}</g>` : geometry;
-        if (def.label && !labels.length) body += `<text x="${W / 2}" y="${flip ? HH / 2 : -HH / 2}" text-anchor="middle" dominant-baseline="central"${textFill} font-family="sans-serif" font-size="${labelSize}">${def.label}</text>`;
+        // A center label still carries lblofst (0.1 unit) on both axes, as in
+        // Element._align_label, and flip/reverse mirror that offset.
+        if (def.label && !labels.length) body += `<text x="${W / 2 + (reverse ? -3.6 : 3.6)}" y="${(flip ? HH / 2 : -HH / 2) + (flip ? 3.6 : -3.6)}" text-anchor="middle" dominant-baseline="central"${textFill} font-family="sans-serif" font-size="${labelSize}">${def.label}</text>`;
         // usize is the label size in points (14 by default); the offset of a
         // one-value label is 0.1 drawing units, which is 3.6 SVG units.
         for (const label of labels) {
           const usize = label.fontsize === undefined ? 14 : label.fontsize;
           const pofst = 0.1 * 36;
           const base = { center: ['center', 'center'], top: ['center', 'bottom'], bot: ['center', 'top'], bottom: ['center', 'top'], left: ['right', 'center'], right: ['left', 'center'] }[label.loc || 'center'];
-          const [ox, oy] = label.loc && label.loc !== 'center' ? anchorLabelOffset(base[0], base[1], pofst) : [0, 0];
+          const [ox, oy] = label.loc && label.loc !== 'center' ? anchorLabelOffset(base[0], base[1], pofst) : [pofst, pofst];
           const lx = reverse ? W - (W / 2 + ox) : W / 2 + ox;
           const ly = flip ? -(-HH / 2 - oy) : -HH / 2 - oy;
           const h = reverse ? mirrorH(base[0]) : base[0];
@@ -3625,10 +3939,12 @@
           const baseline = align[1] === 'center' ? 'central' : align[1] === 'top' ? 'hanging' : 'ideographic';
           return `<text x="${px}" y="${py}" text-anchor="${anchor}" dominant-baseline="${baseline}"${textFill} font-family="sans-serif" font-size="${size}">${escapeText(value)}</text>`;
         }).join('');
-        // The component label sits at the box center (center anchor), so flip
-        // moves it with the box.
-        const labelY = flip ? HH / 2 : -HH / 2;
-        const labelTexts = labels.map(label => `<text x="${W / 2}" y="${labelY}" text-anchor="middle" dominant-baseline="central"${textFill} font-family="sans-serif" font-size="${labelSize}">${labelContent(label.text)}</text>`).join('');
+        // The component label sits at the box center (loc='center'), so flip
+        // moves it with the box. Schemdraw still applies lblofst (0.1 unit) to
+        // both axes for a center label, and flip/reverse mirror that offset.
+        const labelX = W / 2 + (reverse ? -3.6 : 3.6);
+        const labelY = (flip ? HH / 2 : -HH / 2) + (flip ? 3.6 : -3.6);
+        const labelTexts = labels.map(label => `<text x="${labelX}" y="${labelY}" text-anchor="middle" dominant-baseline="central"${textFill} font-family="sans-serif" font-size="${labelSize}">${labelContent(label.text)}</text>`).join('');
         // `botlabel` is Schemdraw's label at the bottom edge of the element
         // (0.1 units below the bbox, so below any bottom leads).
         const bottomLead = Math.max(0, ...pins.B.map(() => sides.B.leadlen * 36));
@@ -4166,18 +4482,21 @@
           'Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE', 'Rshunt', 'SCR', 'Triac',
           'Battery', 'BatteryCell', 'BatteryDouble', 'SourceI', 'Zener', 'LED', 'Diac'].includes(type);
       const transistorType = Boolean(componentDefinitions[type] && componentDefinitions[type].transistor);
+      // dsp symbols place labels with Schemdraw's bbox/rotalign rules, so they
+      // accept ofst, halign and valign like the two-terminal parts.
+      const dspLabel = DSP_TYPES.has(type);
       if (labels.some(label => !label.items && type !== 'Opamp' && (
         ['start', 'end'].includes(label.loc)
         || (['base', 'collector', 'emitter'].includes(label.loc) && !transistorType)
         || (type === 'Dot' && label.ofst != null && !Array.isArray(label.ofst))
-        || (label.valign != null && !genericLabel && !transistorType)
-        || (label.halign != null && !genericLabel && type !== 'Dot' && !oneTerminalType && !transistorType)
-        || (label.ofst != null && !genericLabel && type !== 'Dot' && !oneTerminalType && !transistorType)
+        || (label.valign != null && !genericLabel && !transistorType && !dspLabel)
+        || (label.halign != null && !genericLabel && type !== 'Dot' && !oneTerminalType && !transistorType && !dspLabel)
+        || (label.ofst != null && !genericLabel && type !== 'Dot' && !oneTerminalType && !transistorType && !dspLabel)
         || (label.rotate !== undefined && !(type === 'Resistor' && (!label.loc || label.loc === 'top')) && !oneTerminalType && !genericLabel)
       ))) throw new Error(`The specified label arguments are not supported for ${type}.`);
       const transistor = Boolean(componentDefinitions[type] && componentDefinitions[type].transistor);
       if ('anchor' in options && typeof options.anchor !== 'string') throw new Error('anchor must specify a terminal name.');
-      if ('drop' in options && (!(transistor || logicGateTypes.has(type)) || typeof options.drop !== 'string')) throw new Error('drop must specify a terminal name.');
+      if ('drop' in options && (!(transistor || logicGateTypes.has(type) || DSP_TYPES.has(type)) || typeof options.drop !== 'string')) throw new Error('drop must specify a terminal name.');
       if (('leads' in options && type !== 'Opamp') || ('lead' in options && type !== 'Ground')) throw new Error(`That constructor argument cannot be used with ${type}.`);
       const transistors = ['Bjt', 'JFet', 'Hemt', 'NpnSchottky', 'PnpSchottky', 'BjtNpn', 'BjtPnp', 'BjtPnp2c', 'BjtNpn2', 'BjtPnp2', 'BjtPnp2c2', 'IgbtN', 'IgbtP', 'NpnPhoto', 'PnpPhoto', 'AnalogNFet', 'AnalogPFet', 'AnalogBiasedFet', 'NMos2', 'PMos2', 'NFet2', 'PFet2', 'JFetN2', 'JFetP2', 'JFetN', 'JFetP', 'NFet', 'PFet', 'NMos', 'PMos'];
       if ('reverse' in options && !['SourceV', 'SourceI', 'Zener', 'Potentiometer', 'Rshunt', 'SCR', 'Triac', 'Ground', 'GroundSignal', 'GroundChassis', 'Vdd', 'Vss', 'NoConnect', 'CurrentMirror', 'VoltageMirror', 'Breaker', 'Inductor2', 'CPE', 'Nullator', 'Norator', 'Memristor2', 'ResistorVar', 'Capacitor2', 'ResistorVarIEC', 'ResistorVarIEEE', 'PotentiometerIEC', 'PotentiometerIEEE', 'FuseIEC', 'FuseIEEE', 'DiodeTunnel', 'DiodeTVS', 'DiodeShockley', 'Josephson', 'Photoresistor', 'PhotoresistorBox', 'PhotoresistorIEC', 'PhotoresistorIEEE', 'Coax', 'Triax', 'Motor', 'BusLine', 'DataBusLine', 'Battery', 'BatteryCell', 'BatteryDouble', ...transistors, ...Object.keys(twoTerminalParts), ...logicGateTypes, 'SwitchRotary', 'SwitchDIP', 'Antenna', 'AntennaLoop', 'AntennaLoop2', 'Speaker', 'Mic', 'AudioJack', "OutletA","OutletB","OutletC","OutletD","OutletE","OutletF","OutletG","OutletH","OutletI","OutletJ","OutletK","OutletL", 'Tag', 'Label', 'Arrowhead', 'DotDotDot'].includes(type)) throw new Error(`${type} does not support reverse.`);
@@ -5181,6 +5500,107 @@
         if ('hold' in options) [x, y, direction] = previousState;
         continue;
       }
+      if (DSP_TYPES.has(type)) {
+        // Schemdraw's dsp symbols (and flow.Box) are stand-alone elements: they
+        // are placed at the current point or `at`, then the drawing position
+        // moves to the element's drop (E for the boxes and circles, `out` for
+        // Amp/VGA, or the opposite compass point for a Box placed by
+        // direction).
+        if (length !== null) throw new Error(`${type} does not take a length.`);
+        const spec = buildDsp(type, options, labelSize, color);
+        if ('at' in options) [x, y] = atPoint(options.at);
+        const drawingTheta = typeof direction === 'number' ? direction
+          : ({ right: 0, up: 90, left: 180, down: 270 })[direction];
+        let theta;
+        if ('theta' in options) {
+          if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta must be a finite number.');
+          theta = Number(options.theta);
+        } else if (selectedDirection) {
+          theta = ({ right: 0, up: 90, left: 180, down: 270 })[selectedDirection];
+        } else {
+          // flow.Box declares theta=0, so it does not follow the drawing angle.
+          theta = type === 'Box' ? 0 : drawingTheta;
+        }
+        let anchorName = options.anchor === undefined ? null : options.anchor;
+        let dropPoint = spec.dropPoint;
+        if (type === 'Box' && anchorName === null) {
+          // Box._place: choose the closest compass anchor to the drawing
+          // direction and drop to the opposite point.
+          const th = ((drawingTheta % 360) + 360) % 360;
+          const thetas = [0, 45, 90, 135, 180, 225, 270, 315];
+          const compass = ['W', 'SW', 'S', 'SE', 'E', 'NE', 'N', 'NW'];
+          let index = 0, best = Infinity;
+          thetas.forEach((value, i) => {
+            const distance = Math.abs(value - th);
+            if (distance < best) { best = distance; index = i; }
+          });
+          anchorName = compass[index];
+          const opposite = anchorName.replace(/[NESW]/g, c => ({ N: 'S', S: 'N', E: 'W', W: 'E' })[c]);
+          dropPoint = spec.anchors[opposite] || null;
+        }
+        if (anchorName !== null && !Object.prototype.hasOwnProperty.call(spec.anchors, anchorName)) throw new Error(`Unknown ${type} anchor: ${anchorName}`);
+        if ('drop' in options) {
+          if (!Object.prototype.hasOwnProperty.call(spec.anchors, options.drop)) throw new Error(`Unknown ${type} drop: ${options.drop}`);
+          dropPoint = spec.anchors[options.drop];
+        }
+        const shift = anchorName === null ? [0, 0] : spec.anchors[anchorName];
+        const originX = x, originY = y;
+        const rad = -theta * Math.PI / 180, cos = Math.cos(rad), sin = Math.sin(rad);
+        // Local drawing units (y up) → world SVG pixels.
+        const tf = ([px, py]) => {
+          const qx = (px - shift[0]) * 36, qy = -(py - shift[1]) * 36;
+          return [originX + qx * cos - qy * sin, originY + qx * sin + qy * cos];
+        };
+        const transform = `translate(${originX} ${originY})`
+          + (theta ? ` rotate(${-theta})` : '')
+          + (shift[0] || shift[1] ? ` translate(${-shift[0] * 36} ${shift[1] * 36})` : '');
+        elements.push(`<g transform="${transform}">${spec.body}</g>`);
+        // Glyph texts (Σ, mixer ports) are segments in Schemdraw: their
+        // position follows the element, but the text itself stays upright.
+        for (const glyph of spec.glyphs) {
+          const [gx, gy] = tf([glyph.x / 36, -glyph.y / 36]);
+          elements.push(`<text x="${gx}" y="${gy - glyph.size}" text-anchor="middle" dominant-baseline="central"${textFill} font-family="sans-serif" font-size="${glyph.size}"><tspan x="${gx}" dy="${glyph.size}">${labelContent(glyph.value)}</tspan></text>`);
+        }
+        for (const label of labels) {
+          if (label.items) throw new Error(`${type} does not support list labels.`);
+          if (label.rotate !== undefined) throw new Error(`${type} does not support label rotation.`);
+          const size = label.fontsize === undefined ? labelSize : label.fontsize;
+          const placement = dspLabelPosition(label, spec, theta);
+          const [lx, ly] = tf([placement.x / 36, -placement.y / 36]);
+          const lines = String(label.text).split('\n');
+          const yAttr = placement.valign === 'center' ? ly - (lines.length + 1) / 2 * size
+            : placement.valign === 'top' ? ly - size
+              : ly - lines.length * size;
+          const anchor = { left: 'start', center: 'middle', right: 'end' }[placement.halign];
+          const baseline = placement.valign === 'center' ? 'central' : placement.valign === 'top' ? 'hanging' : 'ideographic';
+          const spans = lines.map(line => `<tspan x="${lx}" dy="${size}">${labelContent(line)}</tspan>`).join('');
+          const visible = label.text.startsWith('$') && label.text.endsWith('$') ? label.text.replace(/[$_{}]/g, '') : label.text;
+          const width = Math.max(12, Array.from(visible).length * size * 0.71);
+          bounds(lx - (anchor === 'start' ? 0 : anchor === 'end' ? width : width / 2), yAttr,
+            lx + (anchor === 'end' ? 0 : anchor === 'start' ? width : width / 2), yAttr + (lines.length + 1) * size);
+          elements.push(`<text x="${lx}" y="${yAttr}" text-anchor="${anchor}" dominant-baseline="${baseline}"${label.color ? ` fill="${label.color}"` : textFill} font-family="sans-serif" font-size="${size}">${spans}</text>`);
+        }
+        const { xmin, ymin, xmax, ymax } = spec.bbox;
+        for (const [bx, by] of [[xmin, ymin], [xmax, ymin], [xmin, ymax], [xmax, ymax]]) {
+          const [wx, wy] = tf([bx, by]);
+          bounds(wx, wy, wx, wy);
+        }
+        const placedAnchors = Object.create(null);
+        for (const [key, value] of Object.entries(spec.anchors)) placedAnchors[key] = tf(value);
+        placedAnchors.xy = tf([0, 0]);
+        if (name) {
+          names[name] = placedAnchors;
+          namedTypes[name] = type;
+          namedBoxes[name] = { ...elemBox };
+        }
+        if (dropPoint) [x, y] = tf(dropPoint);
+        // Element._place keeps dwgtheta for the drop unless the element itself
+        // was given a direction or theta (flow.Box defaults theta to 0).
+        direction = ('theta' in options || selectedDirection) ? theta : drawingTheta;
+        log(`${type}: at (${originX / 36}, ${-originY / 36})`);
+        if ('hold' in options) [x, y, direction] = previousState;
+        continue;
+      }
       if (type === 'SwitchSpdt2') {
         // Schemdraw's SwitchSpdt2 is an Element, not an Element2Term: the
         // 1-unit glyph has no leads. It is placed at the current point (or
@@ -5812,7 +6232,11 @@
       }
       if (shapeExtra) shape += shapeExtra;
       if (type === 'Line' && 'arrow' in options) {
-        const arrow = options.arrow;
+        // Schemdraw's Segment.doreverse() reverses the arrow spec and swaps
+        // the heads, so `reverse` moves the arrow to the start of the line.
+        const arrow = 'reverse' in options
+          ? options.arrow.split('').reverse().join('').replace(/[<>]/g, c => c === '<' ? '>' : '<')
+          : options.arrow;
         shape = `<path d="M ${arrow.includes('<') ? 9 : 0},0 L ${arrow.includes('>') ? length - 9 : length},0" ${stroke}/>`;
         if (arrow.includes('<')) shape += `<path d="M 2,0 L 9,2.7 L 9,-2.7 Z" fill="${color}"/>`;
         if (arrow.includes('>')) shape += `<path d="M ${length - 2},0 L ${length - 9},2.7 L ${length - 9},-2.7 Z" fill="${color}"/>`;
@@ -6004,9 +6428,12 @@
           // Schemdraw's _place_label list branch: items are spread evenly along
           // one bbox edge (top/bottom: along x, left/right: along y, center:
           // along x at the middle). Alignment comes from _align_label.
-          const extents = sideExtent(type);
-          const above = 'flip' in options ? extents[1] : extents[0];
-          const below = 'flip' in options ? extents[0] : extents[1];
+          const extents = sideExtent(type, options);
+          // dot()/idot() add a filled circle (Schemdraw's dotradius, 0.075
+          // unit) to the bbox; it only widens elements thinner than the dot.
+          const dotPad = ('dot' in options || 'idot' in options) ? 2.7 : 0;
+          const above = Math.max('flip' in options ? extents[1] : extents[0], dotPad);
+          const below = Math.max('flip' in options ? extents[0] : extents[1], dotPad);
           const dotR = 2.7;
           const bx1 = ('idot' in options ? -dotR : 0);
           const bx2 = length + ('dot' in options ? dotR : 0);
@@ -6122,9 +6549,12 @@
           // in local coordinates, and the text alignment comes from the
           // rotated `rotalign` table. Text is then drawn upright at the
           // transformed point (rotation_global defaults to True).
-          const extents = sideExtent(type);
-          const above = 'flip' in options ? extents[1] : extents[0];
-          const below = 'flip' in options ? extents[0] : extents[1];
+          const extents = sideExtent(type, options);
+          // dot()/idot() add a filled circle (Schemdraw's dotradius, 0.075
+          // unit) to the bbox; it only widens elements thinner than the dot.
+          const dotPad = ('dot' in options || 'idot' in options) ? 2.7 : 0;
+          const above = Math.max('flip' in options ? extents[1] : extents[0], dotPad);
+          const below = Math.max('flip' in options ? extents[0] : extents[1], dotPad);
           const dotR = 2.7;
           const bx1 = ('idot' in options ? -dotR : 0);
           const bx2 = length + ('dot' in options ? dotR : 0);
@@ -6219,9 +6649,10 @@
         // A source's side label clears its circle: schemdraw uses radius * 1.2.
         // For vertical elements the label anchor is the element bbox edge plus
         // the schematic label offset (lblofst = 0.1 unit), like _place_label.
-        const extents = sideExtent(type);
-        const extAbove = 'flip' in options ? extents[1] : extents[0];
-        const extBelow = 'flip' in options ? extents[0] : extents[1];
+        const extents = sideExtent(type, options);
+        const dotPad = ('dot' in options || 'idot' in options) ? 2.7 : 0;
+        const extAbove = Math.max('flip' in options ? extents[1] : extents[0], dotPad);
+        const extBelow = Math.max('flip' in options ? extents[0] : extents[1], dotPad);
         const sideGap = dy
           ? (verticalSide ? (origLoc === 'bot' ? extBelow : extAbove) + 3.6 : (isSource ? 18 * zoom * 1.2 : 13))
           : 6;

@@ -1555,10 +1555,16 @@
   // Escaped forms (`loc=\"bot\"`) keep the backslash and are reported later.
   function earlyQuotedKeyword(input) {
     const start = input.indexOf('label=');
-    if (start < 0) return false;
+    if (start < 0) return null;
     const after = input.slice(start);
-    return ['loc', 'halign', 'valign', 'color', 'ofst', 'rotate', 'fontsize']
-      .some(key => after.indexOf(key + '="') >= 0);
+    for (const key of ['loc', 'halign', 'valign', 'color', 'ofst', 'rotate', 'fontsize']) {
+      const at = after.indexOf(key + '="');
+      if (at < 0) continue;
+      const rest = after.slice(at + key.length + 2);
+      const end = rest.indexOf('"');
+      return { key, value: end < 0 ? '' : rest.slice(0, end) };
+    }
+    return null;
   }
 
   // Replace top-level commas with spaces and reject empty arguments
@@ -1644,8 +1650,9 @@
           // keyword spelling rule rather than as a generic parse failure.
           // `label="'x' loc="bot""` lets the inner quotes close the label text
           // early; report the keyword spelling rule instead of a bare parse error.
-          if (earlyQuotedKeyword(input)) throw new Error(
-            `Line ${lineLabel}: label arguments take keywords, not quoted strings (write loc=bot, not loc="bot").`);
+          const quotedLabelArg = earlyQuotedKeyword(input);
+          if (quotedLabelArg) throw new Error(
+            `Line ${lineLabel}: label arguments take keywords, not quoted strings (write ${quotedLabelArg.key}=${quotedLabelArg.value}, not ${quotedLabelArg.key}="${quotedLabelArg.value}").`);
           throw new Error(`Line ${lineLabel}: cannot parse arguments: ${rest}`);
         }
         let value = m[2], quoted = m[2] !== undefined;

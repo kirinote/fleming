@@ -28,10 +28,10 @@ circuit {
   }
   Line: right="d.unit*.75"
   S1 {
-    SwitchSpdt2: up anchor="b" action="close" label="'$t=0$' loc='rgt'"
+    SwitchSpdt2: up anchor="b" action="close" label="'$t=0$' loc=rgt"
   }
   Line: right="d.unit*.75" at="S1.c"
-  Resistor: down label="'$100\Omega$'" label="['+' '$v_o$' '-'] loc='bot'"
+  Resistor: down label="'$100\Omega$'" label="['+' '$v_o$' '-'] loc=bot"
   Line: to="V1.start"
   Capacitor: at="S1.a" toy="V1.start" label="'1$\mu$F'" dot
 }
@@ -58,25 +58,25 @@ with schemdraw.Drawing() as d:
 circuit {
   config: fontsize="12"
   C1 {
-    Capacitor: label="8nF" idot label="'a' loc='left'"
+    Capacitor: label="8nF" idot label="'a' loc=left"
   }
   C2 {
     Capacitor: label="18nF"
   }
   C3 {
-    Capacitor: down label="'8nF' loc='bottom'"
+    Capacitor: down label="'8nF' loc=bottom"
   }
   C4 {
     Capacitor: left label="32nF"
   }
   C5 {
-    Capacitor: label="'40nF' loc='bottom'" dot label="'b' loc='left'"
+    Capacitor: label="'40nF' loc=bottom" dot label="'b' loc=left"
   }
   C6 {
     Capacitor: endpoints="C1.end C5.start" label="2.8nF"
   }
   C7 {
-    Capacitor: endpoints="C2.end C5.start" label="'5.6nF' loc='center' ofst=(-.3 -.1) halign='right' valign='bottom'"
+    Capacitor: endpoints="C2.end C5.start" label="'5.6nF' loc=center ofst=(-.3 -.1) halign=right valign=bottom"
   }
 }
 ```
@@ -128,8 +128,8 @@ circuit {
     Resistor: toy="V1.end" label="6Ω" dot
   }
   Line: left="3" hold
-  Resistor: right at="R6.start" label="1.6Ω" dot="open" label="'a' loc='right'"
-  Line: right at="R6.end" dot="open" label="'b' loc='right'"
+  Resistor: right at="R6.start" label="1.6Ω" dot="open" label="'a' loc=right"
+  Line: right at="R6.end" dot="open" label="'b' loc=right"
 }
 ```
 
@@ -158,13 +158,13 @@ circuit {
     Resistor: right label="'400Ω'" dot
   }
   R2 {
-    Resistor: down label="'100Ω' loc='bot' rotate=True" dot hold
+    Resistor: down label="'100Ω' loc=bot rotate=True" dot hold
   }
   L1 {
     Line: right
   }
   I1 {
-    SourceI: down label="'1A' loc='bot'"
+    SourceI: down label="'1A' loc=bot"
   }
   L2 {
     Line: tox="V1.start"
@@ -201,7 +201,7 @@ circuit {
     Inductor: down label="j2Ω" dot hold
     Resistor: right label="5Ω" dot
     V1 {
-      SourceV: down reverse label="'5∠-90° V' loc='bot'"
+      SourceV: down reverse label="'5∠-90° V' loc=bot"
     }
     Line: tox="I1.start"
   }
@@ -322,7 +322,7 @@ circuit {
     Line: right="d.unit*3" at="D.E" idot
   }
   Q2 {
-    BjtNpn: circle=True up anchor="collector" label="'Q2\n2n3055' loc='top'"
+    BjtNpn: circle=True up anchor="collector" label="'Q2\n2n3055' loc=top"
   }
   Line: down="d.unit/2" at="Q2.base"
   Q2b {
@@ -330,31 +330,31 @@ circuit {
   }
   Line: left="d.unit/3"
   Q1 {
-    BjtNpn: circle=True up anchor="emitter" label="'Q1\n    2n3054' loc='top'"
+    BjtNpn: circle=True up anchor="emitter" label="'Q1\n    2n3054' loc=top"
   }
   Line: at="Q1.collector" toy="top.center" dot
   Line: down="d.unit/2" at="Q1.base" dot
-  Zener: down reverse label="'D2\n500mA' loc='bot'" dot
+  Zener: down reverse label="'D2\n500mA' loc=bot" dot
   GND {
     Ground:
   }
   Line: left dot
-  Capacitor: polar=True up reverse label="'C2\n100$\mu$F\n50V' loc='bot'" dot
+  Capacitor: polar=True up reverse label="'C2\n100$\mu$F\n50V' loc=bot" dot
   Line: right hold
-  Resistor: toy="top.end" label="'R1\n2.2K\n50V' loc='bot'" dot
+  Resistor: toy="top.end" label="'R1\n2.2K\n50V' loc=bot" dot
   move: dx="-d.unit" dy="0"
   Capacitor: polar=True toy="GND.start" flip label="'C1\n 1000$\mu$F\n50V'" dot idot
   Line: at="GND.start" tox="D.W"
   Line: toy="D.W" dot
-  Resistor: right at="Q2b.center" label="R2" label="'56$\Omega$ 1W' loc='bot'" dot
+  Resistor: right at="Q2b.center" label="R2" label="'56$\Omega$ 1W' loc=bot" dot
   hold {
     Line: toy="top.start" dot
     Line: tox="Q2.emitter"
   }
-  Capacitor: polar=True toy="GND.start" label="'C3\n470$\mu$F\n50V' loc='bot'" dot
+  Capacitor: polar=True toy="GND.start" label="'C3\n470$\mu$F\n50V' loc=bot" dot
   Line: tox="GND.start" hold
   Line: right dot
-  Resistor: toy="top.center" label="'R3\n10K\n1W' loc='bot'" dot
+  Resistor: toy="top.center" label="'R3\n10K\n1W' loc=bot" dot
   Line: left hold
   Line: right
   Dot: open=True
@@ -366,7 +366,7 @@ circuit {
 
 > schemdraw reuses `G` for both the Gap and the Ground, so the fleming version uses `ACIN` for the Gap and `GND` for the Ground.
 >
-> Two-line labels such as Q1 and Q2 are split into lines only when the text is wrapped in single quotes, as in `label="'...\n...' loc='top'"`; `loc='top'` centers the label above the transistor as in the original. Without the single quotes, `\n` is displayed literally.
+> Two-line labels such as Q1 and Q2 are split into lines only when the text is wrapped in single quotes, as in `label="'...\n...' loc=top"`; `loc=top` centers the label above the transistor as in the original. Without the single quotes, `\n` is displayed literally.
 
 ### A-8. 5-transistor Operational Transconductance Amplifier (OTA)
 
@@ -634,7 +634,7 @@ circuit {
   top {
     Line: up=".5" at="q.anode"
   }
-  Line: left="2" at="q.grid" dot="open" label="'$V_{in}$' loc='left'"
+  Line: left="2" at="q.grid" dot="open" label="'$V_{in}$' loc=left"
   Line: down="1.3" at="q.cathode" dot
   R1 {
     Resistor: label="R1" length="2" dot
@@ -642,13 +642,13 @@ circuit {
   Ground:
   Line: right dot
   pv {
-    Battery: reverse label="'Plate V' loc='bottom'" dot
+    Battery: reverse label="'Plate V' loc=bottom" dot
   }
-  Battery: reverse label="'Bal. V' loc='bottom'"
-  ResistorVar: up flip label="'Zero\nAdj.' loc='bottom'"
-  Resistor: up label="'R2' loc='bottom'" toy="top.end"
+  Battery: reverse label="'Bal. V' loc=bottom"
+  ResistorVar: up flip label="'Zero\nAdj.' loc=bottom"
+  Resistor: up label="'R2' loc=bottom" toy="top.end"
   Line: tox="pv.end" dot
-  MeterArrow: toy="pv.end" reverse label="'DC μA\nMeter' loc='bottom'" label="'+' loc='iend' ofst=(.2 -.3)" label="'−' loc='istart' ofst=(-.15 -.3)" hold
+  MeterArrow: toy="pv.end" reverse label="'DC μA\nMeter' loc=bottom" label="'+' loc=iend ofst=(.2 -.3)" label="'−' loc=istart ofst=(-.15 -.3)" hold
   Line: tox="pv.start" dot
   Line: tox="q.anode" hold
   Capacitor: down label="C1" toy="R1.start" dot
@@ -706,24 +706,24 @@ circuit {
   v3 {
     DualVacuumTube: grids_left="0" grids_right="0" heater=False label="V3"
   }
-  Line: at="v3.cathodeB" down="1.25" dot label="'D2' loc='left'"
+  Line: at="v3.cathodeB" down="1.25" dot label="'D2' loc=left"
   Line: right="2.5"
   R3 {
     Resistor: up label="R3" dot
   }
   Wire: shape="-|" to="v3.anodeB"
-  Line: at="v3.cathodeA" down="1.25" dot label="'D1' loc='left'"
+  Line: at="v3.cathodeA" down="1.25" dot label="'D1' loc=left"
   Line: tox="v3.cathodeB" hold
   Line: left="1.5" dot
   Line: left="1.5" dot="open" hold
   R1 {
-    Resistor: up label="'R1' loc='bottom'" dot
+    Resistor: up label="'R1' loc=bottom" dot
   }
   Capacitor: left="1.5" label="C1" dot="open"
   Gap: toy="R1.start" label="Input"
   Wire: shape="-|" at="R1.end" to="v3.anodeA" hold
   v1 {
-    Triode: theta="-45" at="(6.5 3)" label="'V1' loc='NE'"
+    Triode: theta="-45" at="(6.5 3)" label="'V1' loc=NE"
   }
   Line: theta="135" at="v1.grid" length=".75"
   Line: left="1" dot
@@ -744,17 +744,17 @@ circuit {
   }
   Line: theta="-45" length=".75"
   v2 {
-    Triode: theta="45" anchor="anode" label="'V2' loc='NW'"
+    Triode: theta="45" anchor="anode" label="'V2' loc=NW"
   }
   Line: at="v2.grid_R" theta="45" length=".75"
   Wire: shape="n" k="2" to="R3.end"
   Line: at="v2.cathode" theta="-45" length="1.5" dot
   R7 {
-    Resistor: shift=".5" left label="'R7' loc='bottom'"
+    Resistor: shift=".5" left label="'R7' loc=bottom"
   }
   MeterArrow: shift="-0.3" reverse tox="d1.end"
-  Resistor: theta="-45" label="'R5' loc='bottom'" tox="R4.tap" dot
-  Resistor: to="R7.start" label="'R6' loc='bottom'" hold
+  Resistor: theta="-45" label="'R5' loc=bottom" tox="R4.tap" dot
+  Resistor: to="R7.start" label="'R6' loc=bottom" hold
   Line: right="5"
   bat {
     BatteryDouble: reverse up toy="R4.tap"
@@ -793,12 +793,12 @@ circuit {
   Line: down="d.unit/4" at="op.in2"
   Ground: lead=False
   Rin {
-    Resistor: at="op.in1" left idot label="'$R_{in}$' loc='bot'" label="'$v_{in}$' loc='left'"
+    Resistor: at="op.in1" left idot label="'$R_{in}$' loc=bot" label="'$v_{in}$' loc=left"
   }
   Line: up="d.unit/2" at="op.in1"
   Resistor: tox="op.out" label="'$R_f$'"
   Line: toy="op.out" dot
-  Line: right="d.unit/4" at="op.out" label="'$v_{o}$' loc='right'"
+  Line: right="d.unit/4" at="op.out" label="'$v_{o}$' loc=right"
 }
 ```
 
@@ -889,7 +889,7 @@ circuit {
   Line: up="1.5" at="O2.in1"
   Resistor: tox="O2.out" label="'90k$\Omega$'"
   Line: toy="O2.out" dot
-  Line: right="1" at="O2.out" label="'$v_{out}$' loc='rgt'"
+  Line: right="1" at="O2.out" label="'$v_{out}$' loc=rgt"
 }
 ```
 
@@ -928,14 +928,14 @@ with schemdraw.Drawing() as d:
 circuit {
   config: fontsize="12"
   op {
-    Opamp: label="'741' loc='center' ofst=0" label="'1' loc='n1'" label="'5' loc='n1a'" label="'4' loc='vs'" label="'7' loc='vd'" label="'2' loc='in1'" label="'3' loc='in2'" label="'6' loc='out'"
+    Opamp: label="'741' loc=center ofst=0" label="'1' loc=n1" label="'5' loc=n1a" label="'4' loc=vs" label="'7' loc=vd" label="'2' loc=in1" label="'3' loc=in2" label="'6' loc=out"
   }
   Line: left=".5" at="op.in1"
   Line: down="d.unit/2"
   Ground: lead=False
   Line: left=".5" at="op.in2"
-  Line: right=".5" at="op.out" label="'$V_o$' loc='right'"
-  Line: up="1" at="op.vd" label="'$+V_s$' loc='right'"
+  Line: right=".5" at="op.out" label="'$V_o$' loc=right"
+  Line: up="1" at="op.vd" label="'$+V_s$' loc=right"
   trim {
     Potentiometer: down at="op.n1" flip scale="0.7"
   }
@@ -979,9 +979,9 @@ with schemdraw.Drawing() as d:
 ```fleming
 circuit {
   config: fontsize="10"
-  Line: length="d.unit/5" label="'V' loc='left'"
+  Line: length="d.unit/5" label="'V' loc=left"
   smu {
-    Opamp: sign=False anchor="in2" label="'SMU' loc='center' ofst=(-.4 0) halign='center' valign='center'"
+    Opamp: sign=False anchor="in2" label="'SMU' loc=center ofst=(-.4 0) halign=center valign=center"
   }
   Line: at="smu.out" length=".3"
   hold {
@@ -995,7 +995,7 @@ circuit {
   Wire: shape="|-" to="smu.in1" hold
   Wire: shape="|-" delta="(d.unit/5 d.unit/5)"
   buf {
-    Opamp: sign=False anchor="in2" scale="0.6" label="'BUF' loc='center' ofst=(-.4 0) halign='center' valign='center'"
+    Opamp: sign=False anchor="in2" scale="0.6" label="'BUF' loc=center ofst=(-.4 0) halign=center valign=center"
   }
   Line: left="d.unit/5" at="buf.in1"
   Wire: shape="n" to="buf.out" dx=".5" dot
@@ -1028,16 +1028,16 @@ with schemdraw.Drawing() as d:
 circuit {
   config: unit="0.5"
   S {
-    Xor: label="'S' loc='right'"
+    Xor: label="'S' loc=right"
   }
-  Line: left="d.unit*2" at="S.in1" idot label="'A' loc='left'"
+  Line: left="d.unit*2" at="S.in1" idot label="'A' loc=left"
   B {
     Line: left at="S.in2" dot
   }
-  Line: left label="'B' loc='left'"
+  Line: left label="'B' loc=left"
   Line: down="d.unit*3" at="S.in1"
   C {
-    And: right anchor="in1" label="'C' loc='right'"
+    And: right anchor="in1" label="'C' loc=right"
   }
   Wire: shape="|-" at="B.end" to="C.in2"
 }
@@ -1078,12 +1078,12 @@ circuit {
     Xor:
   }
   A {
-    Line: left="d.unit*2" at="X1.in1" idot label="'A' loc='left'"
+    Line: left="d.unit*2" at="X1.in1" idot label="'A' loc=left"
   }
   B {
     Line: left at="X1.in2" dot
   }
-  Line: left label="'B' loc='left'"
+  Line: left label="'B' loc=left"
   Line: right at="X1.out" idot
   X2 {
     Xor: anchor="in1"
@@ -1093,7 +1093,7 @@ circuit {
   }
   hold {
     Dot: at="C.center"
-    Line: tox="A.end" label="'C$_{in}$' loc='left'"
+    Line: tox="A.end" label="'C$_{in}$' loc=left"
   }
   A1 {
     And: right anchor="in1"
@@ -1107,11 +1107,11 @@ circuit {
   Wire: shape="-|" at="A2.in2" to="B.end"
   move_from: at="A1.out" dy="-(A1.out.y-A2.out.y)/2"
   O1 {
-    Or: right label="'C$_{out}$' loc='right'"
+    Or: right label="'C$_{out}$' loc=right"
   }
   Line: at="A1.out" toy="O1.in1"
   Line: at="A2.out" toy="O1.in2"
-  Line: at="X2.out" tox="O1.out" label="'S' loc='right'"
+  Line: at="X2.out" tox="O1.out" label="'S' loc=right"
 }
 ```
 
@@ -1147,12 +1147,12 @@ circuit {
   G1 {
     Nand: leadout=".75" anchor="in1"
   }
-  Line: length="d.unit/2" label="'Q' loc='right'"
+  Line: length="d.unit/2" label="'Q' loc=right"
   move_from: at="G1.in1" dy="-2.5"
   G2 {
     Nand: leadout=".75" anchor="in1"
   }
-  Line: length="d.unit/2" label="'$\overline{Q}$' loc='right'"
+  Line: length="d.unit/2" label="'$\overline{Q}$' loc=right"
   Wire: shape="N" k=".5" at="G2.in1" to="G1.out" dot
   Wire: shape="N" k=".5" at="G1.in2" to="G2.out" dot
   Line: left="d.unit/6" at="G1.in1"
@@ -1160,18 +1160,18 @@ circuit {
     Nand: inputs="3" anchor="out" right
   }
   Wire: shape="n" k=".5" at="J.in1" to="G2.out" dx="1" dot
-  Line: left="d.unit/4" at="J.in2" label="'J' loc='left'"
+  Line: left="d.unit/4" at="J.in2" label="'J' loc=left"
   Line: left="d.unit/6" at="G2.in2"
   K {
     Nand: inputs="3" right anchor="out"
   }
   Wire: shape="n" k="-.5" at="K.in3" to="G1.out" dx=".5" dot
-  Line: left="d.unit/4" at="K.in2" label="'K' loc='left'"
+  Line: left="d.unit/4" at="K.in2" label="'K' loc=left"
   C {
     Line: at="J.in3" toy="K.in1"
   }
   Dot: at="C.center"
-  Line: left="d.unit/4" label="'CLK' loc='left'"
+  Line: left="d.unit/4" label="'CLK' loc=left"
 }
 ```
 
@@ -1209,10 +1209,10 @@ circuit {
     Line: right=".25" at="g2.out"
   }
   Wire: shape="N" k=".5" at="g1.in2" to="g2out.end" dot
-  Line: at="g1.in1" left=".5" label="'R' loc='left'"
-  Line: at="g2.in2" left=".5" label="'S' loc='left'"
-  Line: at="g1.out" right=".75" label="'Q' loc='right'"
-  Line: at="g2.out" right=".75" label="'$\overline{Q}$' loc='right'"
+  Line: at="g1.in1" left=".5" label="'R' loc=left"
+  Line: at="g2.in2" left=".5" label="'S' loc=left"
+  Line: at="g1.out" right=".75" label="'Q' loc=right"
+  Line: at="g2.out" right=".75" label="'$\overline{Q}$' loc=right"
 }
 ```
 
@@ -1257,7 +1257,7 @@ with schemdraw.Drawing() as d:
 ```fleming
 circuit {
   Q1 {
-    BjtNpn: circle=True reverse label="'Q1' loc='left'"
+    BjtNpn: circle=True reverse label="'Q1' loc=left"
   }
   Q2 {
     BjtNpn: circle=True at="(d.unit*2 0)" label="Q2"
@@ -1266,17 +1266,17 @@ circuit {
   R1 {
     Resistor: up label="R1" hold
   }
-  Dot: label="'V1' loc='left'"
-  Resistor: right="d.unit*.75" label="'R3' loc='bottom'" dot
-  Line: up="d.unit/8" dot="open" label="'Set' loc='right'" hold
+  Dot: label="'V1' loc=left"
+  Resistor: right="d.unit*.75" label="'R3' loc=bottom" dot
+  Line: up="d.unit/8" dot="open" label="'Set' loc=right" hold
   Line: to="Q2.base"
   Line: up="d.unit/2" at="Q2.collector"
-  Dot: label="'V2' loc='right'"
+  Dot: label="'V2' loc=right"
   R2 {
-    Resistor: up label="'R2' loc='bottom'" hold
+    Resistor: up label="'R2' loc=bottom" hold
   }
-  Resistor: left="d.unit*.75" label="'R4' loc='bottom'" dot
-  Line: up="d.unit/8" dot="open" label="'Reset' loc='right'" hold
+  Resistor: left="d.unit*.75" label="'R4' loc=bottom" dot
+  Line: up="d.unit/8" dot="open" label="'Reset' loc=right" hold
   Line: to="Q1.base"
   Line: down="d.unit/4" at="Q1.emitter"
   BOT {
@@ -1420,10 +1420,10 @@ with schemdraw.Drawing() as d:
 circuit {
   config: fontsize="12" unit="2.5"
   Q1 {
-    BjtNpn: label="Q1" label="'+IN' loc='left'"
+    BjtNpn: label="Q1" label="'+IN' loc=left"
   }
   Q3 {
-    BjtPnp: left at="Q1.emitter" anchor="emitter" flip label="'Q3' loc='left'"
+    BjtPnp: left at="Q1.emitter" anchor="emitter" flip label="'Q3' loc=left"
   }
   Line: down at="Q3.collector" dot
   hold {
@@ -1434,9 +1434,9 @@ circuit {
   }
   Line: down="d.unit*1.25"
   Q5 {
-    BjtNpn: left flip anchor="collector" label="'Q5' loc='left'"
+    BjtNpn: left flip anchor="collector" label="'Q5' loc=left"
   }
-  Line: left="d.unit/2" at="Q5.emitter" label="'OFST\nNULL' loc='left'" flip
+  Line: left="d.unit/2" at="Q5.emitter" label="'OFST\nNULL' loc=left" flip
   Resistor: down at="Q5.emitter" label="'R1\n1K'"
   Line: right="d.unit*.75" dot
   R3 {
@@ -1451,7 +1451,7 @@ circuit {
   Q6 {
     BjtNpn: anchor="base" label="Q6"
   }
-  Line: at="Q6.emitter" length="d.unit/3" label="'\nOFST\nNULL' loc='right'" hold
+  Line: at="Q6.emitter" length="d.unit/3" label="'\nOFST\nNULL' loc=right" hold
   Resistor: down at="Q6.emitter" label="'R2\n1K'" dot
   Line: at="Q6.collector" toy="Q3.collector"
   Q4 {
@@ -1460,11 +1460,11 @@ circuit {
   Line: at="Q4.base" tox="Q3.base"
   Line: at="Q4.emitter" toy="Q1.emitter"
   Q2 {
-    BjtNpn: left flip anchor="emitter" label="'Q2' loc='left'" label="'$-$IN' loc='right'"
+    BjtNpn: left flip anchor="emitter" label="'Q2' loc=left" label="'$-$IN' loc=right"
   }
   Line: up="d.unit/3" at="Q2.collector" dot
   Q8 {
-    BjtPnp: left flip anchor="base" label="'Q8' loc='left'"
+    BjtPnp: left flip anchor="base" label="'Q8' loc=left"
   }
   Line: at="Q8.collector" toy="Q2.collector" dot
   Line: at="Q2.collector" tox="Q1.collector"
@@ -1484,7 +1484,7 @@ circuit {
   Line: tox="Q9.collector" dot
   Line: at="Q9.collector" toy="Q6.collector"
   Q10 {
-    BjtNpn: left flip anchor="collector" label="'Q10' loc='left'"
+    BjtNpn: left flip anchor="collector" label="'Q10' loc=left"
   }
   Resistor: at="Q10.emitter" toy="R3.start" label="'R4\n5K'" dot
   Q11 {
@@ -1497,7 +1497,7 @@ circuit {
   Line: up="d.unit*2" at="Q11.collector"
   Resistor: toy="Q9.collector" label="'R5\n39K'"
   Q12 {
-    BjtPnp: left flip anchor="collector" label="'Q12' loc='left' ofst=-.1"
+    BjtPnp: left flip anchor="collector" label="'Q12' loc=left ofst=-.1"
   }
   Line: up="d.unit/4" at="Q12.emitter" dot
   Line: tox="Q9.emitter" dot
@@ -1547,7 +1547,7 @@ circuit {
   Line: down="d.unit/4" at="Q19.emitter" dot
   Line: left
   Q22 {
-    BjtNpn: left anchor="base" flip label="'Q22' loc='left'"
+    BjtNpn: left anchor="base" flip label="'Q22' loc=left"
   }
   Line: at="Q22.collector" toy="Q15.base" dot
   Line: at="Q22.emitter" toy="R3.start" dot
@@ -1564,7 +1564,7 @@ circuit {
   Line: toy="Q19.emitter"
   Line: up="d.unit/4" at="Q13.emitter"
   Line: right="d.unit*1.5" dot
-  Line: length="d.unit/4" label="'V+' loc='right'" hold
+  Line: length="d.unit/4" label="'V+' loc=right" hold
   Line: down="d.unit*.75"
   Q14 {
     BjtNpn: right anchor="collector" label="Q14"
@@ -1573,7 +1573,7 @@ circuit {
   hold {
     Line: down="d.unit/2" idot
     Q17 {
-      BjtNpn: left anchor="collector" flip label="'Q17' loc='left' ofst=-.1"
+      BjtNpn: left anchor="collector" flip label="'Q17' loc=left ofst=-.1"
     }
     Line: at="Q17.base" tox="Q14.emitter" dot
     JL {
@@ -1584,14 +1584,14 @@ circuit {
   Resistor: down at="JL.start" label="'R9\n25'" dot
   Wire: shape="-|" to="Q17.emitter" hold
   Line: down="d.unit/4" dot
-  Line: right="d.unit/4" label="'OUT' loc='right'" hold
+  Line: right="d.unit/4" label="'OUT' loc=right" hold
   Resistor: down label="'R10\n50'"
   Q20 {
     BjtPnp: right anchor="emitter" label="Q20"
   }
   Wire: shape="c" k="-1" at="Q20.base" to="Q15.collector"
   Line: at="Q20.collector" toy="R3.start" dot
-  Line: right="d.unit/4" label="'V-' loc='right'" hold
+  Line: right="d.unit/4" label="'V-' loc=right" hold
   Line: tox="R11.start"
 }
 ```
@@ -1651,16 +1651,16 @@ circuit {
   }
   Dot: at="T.GND"
   Resistor: endpoints="T.DIS T.THR" label="Rb" idot
-  Resistor: up at="T.DIS" label="Ra" label="'+Vcc' loc='right'"
+  Resistor: up at="T.DIS" label="Ra" label="'+Vcc' loc=right"
   Line: endpoints="T.THR T.TRG"
   Capacitor: at="T.TRG" toy="BOT.start" label="C"
   Line: tox="BOT.start"
-  Capacitor: at="T.CTL" toy="BOT.start" label="'.01$\mu$F' loc='bot'" dot
+  Capacitor: at="T.CTL" toy="BOT.start" label="'.01$\mu$F' loc=bot" dot
   Dot: at="T.DIS"
   Dot: at="T.THR"
   Dot: at="T.TRG"
   Line: endpoints="T.RST T.Vcc" dot
-  Line: up="d.unit/4" label="'+Vcc' loc='right'"
+  Line: up="d.unit/4" label="'+Vcc' loc=right"
   Resistor: right at="T.OUT" label="330"
   LED: flip toy="BOT.start"
   Line: tox="BOT.start"
@@ -1743,17 +1743,17 @@ circuit {
   }
   Dot: at="IC555.GND"
   Resistor: endpoints="IC555.DIS IC555.THR" label="100 kΩ"
-  Resistor: up at="IC555.DIS" label="1 kΩ" label="'+Vcc' loc='right'"
+  Resistor: up at="IC555.DIS" label="1 kΩ" label="'+Vcc' loc=right"
   Line: endpoints="IC555.THR IC555.TRG"
   Capacitor: polar=True at="IC555.TRG" toy="gnd.start" label="10 μF"
   Line: tox="gnd.start"
-  Capacitor: at="IC555.CTL" toy="gnd.start" label="'.01 μF' loc='bot'"
+  Capacitor: at="IC555.CTL" toy="gnd.start" label="'.01 μF' loc=bot"
   Line: tox="gnd.start"
   Dot: at="IC555.DIS"
   Dot: at="IC555.THR"
   Dot: at="IC555.TRG"
   Line: endpoints="IC555.RST IC555.Vcc" dot
-  Line: up="d.unit/4" label="'+Vcc' loc='right'"
+  Line: up="d.unit/4" label="'+Vcc' loc=right"
   move_from: at="IC555.OUT" dx="5" dy="-1"
   IC4026 {
     Ic: pin="L CLK 1" pin="L INH 2" pin="L RST 15" pin="L DEI 3" pin="B Vss 8" pin="T Vdd 16" pin="B UCS 14" pin="B DEO 4" pin="B Co 4" pin="R g 7" pin="R f 6" pin="R e 11" pin="R d 9" pin="R c 13" pin="R b 12" pin="R a 10" side="B spacing=1 pad=.75 leadlen=.75" side="L spacing=1 pad=1.5 leadlen=.6" label="4026" right anchor="center"
@@ -1763,7 +1763,7 @@ circuit {
   Line: left="d.unit/4"
   Ground:
   Wire: shape="|-" at="IC4026.DEI" to="IC4026.Vdd" dot
-  Line: up="d.unit/4" label="'+Vcc' loc='right'"
+  Line: up="d.unit/4" label="'+Vcc' loc=right"
   Line: at="IC4026.Vss" tox="IC4026.UCS" dot
   Ground:
   Line: tox="IC4026.DEO" dot
@@ -1777,7 +1777,7 @@ circuit {
   Resistor: at="IC4026.d"
   Resistor: at="IC4026.e"
   Resistor: at="IC4026.f"
-  Resistor: at="IC4026.g" label="'7 x 330' loc='bot'"
+  Resistor: at="IC4026.g" label="'7 x 330' loc=bot"
   Ground: lead=False at="disp.cathode"
 }
 ```
@@ -1935,10 +1935,10 @@ circuit {
   OrthoLines: n="6" at="Q1.PB5" to="JP4.pin6"
   OrthoLines: n="6" at="Q1.PC5" to="JP3.pin6"
   OrthoLines: n="8" at="Q1.PD7" to="JP2.pin8"
-  Line: left=".9" at="JP4.pin7" label="'GND' loc='left'"
-  Line: left=".9" at="JP4.pin8" label="'AREF' loc='left'"
-  Line: left=".9" at="JP4.pin9" label="'AD4/SDA' loc='left'"
-  Line: left=".9" at="JP4.pin10" label="'AD5/SCL' loc='left'"
+  Line: left=".9" at="JP4.pin7" label="'GND' loc=left"
+  Line: left=".9" at="JP4.pin8" label="'AREF' loc=left"
+  Line: left=".9" at="JP4.pin9" label="'AD4/SDA' loc=left"
+  Line: left=".9" at="JP4.pin10" label="'AD5/SCL' loc=left"
   JP1 {
     Header: rows="6" shownumber=True pinsright="['VCC' 'RXD' 'TXD' 'DTR' 'RTS' 'GND']" pinalignright="center" right at="Q1.PD0" dx="4" dy="-2" anchor="pin1"
   }
@@ -1957,9 +1957,9 @@ circuit {
     Ground:
     Capacitor: right="d.unit/2" scale=".75" dot
   }
-  Crystal: toy="Q1.XTAL1" label="'16MHz' loc='bot'"
+  Crystal: toy="Q1.XTAL1" label="'16MHz' loc=bot"
   Line: tox="Q1.XTAL1"
-  Line: left="d.unit/3" at="Q1.AREF" label="'AREF' loc='left'"
+  Line: left="d.unit/3" at="Q1.AREF" label="'AREF' loc=left"
   Line: left="1.5*d.unit" at="Q1.AVCC"
   Vdd: label="'+5V'"
   Line: toy="Q1.VCC" dot idot
@@ -1985,7 +1985,7 @@ circuit {
     Line: left="d.unit/2"
     Ground:
   }
-  Capacitor: left at="JP1.pin4" label="'100n' loc='bot'"
+  Capacitor: left at="JP1.pin4" label="'100n' loc=bot"
   Wire: shape="c" k="-16" to="RST.start"
 }
 ```
@@ -2015,14 +2015,14 @@ with schemdraw.Drawing() as d:
 circuit {
   Q {
     IcDIP: pins="8",
-     label="'Offset Null' loc='p1' fontsize=10",
-     label="'Inverting Input' loc='p2' fontsize=10",
-     label="'Non-inverting Input' loc='p3' fontsize=10",
-     label="'V-' loc='p4' fontsize=10",
-     label="'Offset Null' loc='p5' fontsize=10",
-     label="'Output' loc='p6' fontsize=10",
-     label="'V+' loc='p7' fontsize=10",
-     label="'NC' loc='p8' fontsize=10",
+     label="'Offset Null' loc=p1 fontsize=10",
+     label="'Inverting Input' loc=p2 fontsize=10",
+     label="'Non-inverting Input' loc=p3 fontsize=10",
+     label="'V-' loc=p4 fontsize=10",
+     label="'Offset Null' loc=p5 fontsize=10",
+     label="'Output' loc=p6 fontsize=10",
+     label="'V+' loc=p7 fontsize=10",
+     label="'NC' loc=p8 fontsize=10",
   }
   Line: at="Q.p2_in" length="d.unit/5"
   op {
@@ -2077,10 +2077,10 @@ circuit {
   intg {
     Box: w="2" h="2" anchor="W" label="'$\int$'"
   }
-  Arrow: right="d.unit/2" at="intg.E" label="'out' loc='right'"
+  Arrow: right="d.unit/2" at="intg.E" label="'out' loc=right"
   Line: down="d.unit/2" at="inpt.center"
   Line: tox="sm.S"
-  Arrow: toy="sm.S" label="'+' loc='bot'"
+  Arrow: toy="sm.S" label="'+' loc=bot"
 }
 ```
 
@@ -2128,7 +2128,7 @@ circuit {
   Arrow: toy="sm.N"
   Line: at="h2.E" tox="sm.S"
   Arrow: toy="sm.S"
-  Arrow: right="d.unit/3" at="sm.E" label="'Y(s)' loc='right'"
+  Arrow: right="d.unit/3" at="sm.E" label="'Y(s)' loc=right"
 }
 ```
 
@@ -2162,23 +2162,23 @@ circuit {
   config: fontsize="12"
   Antenna:
   Line: right="d.unit/4"
-  Filter: response="bp" fill="thistle" anchor="W" label="'RF filter\n#1' loc='bottom' ofst=.2"
+  Filter: response="bp" fill="thistle" anchor="W" label="'RF filter\n#1' loc=bottom ofst=.2"
   Line: length="d.unit/4"
   Amp: fill="lightblue" label="LNA"
   Line: length="d.unit/4"
-  Filter: response="bp" anchor="W" fill="thistle" label="'RF filter\n#2' loc='bottom' ofst=.2"
+  Filter: response="bp" anchor="W" fill="thistle" label="'RF filter\n#2' loc=bottom ofst=.2"
   Line: length="d.unit/3"
   mix {
     Mixer: fill="navajowhite" label="Mixer"
   }
   Line: at="mix.S" down="d.unit/3"
-  Oscillator: right anchor="N" fill="navajowhite" label="'Local\nOscillator' loc='right' ofst=.2"
+  Oscillator: right anchor="N" fill="navajowhite" label="'Local\nOscillator' loc=right ofst=.2"
   Line: at="mix.E" right="d.unit/3"
-  Filter: response="bp" anchor="W" fill="thistle" label="'IF filter' loc='bottom' ofst=.2"
+  Filter: response="bp" anchor="W" fill="thistle" label="'IF filter' loc=bottom ofst=.2"
   Line: right="d.unit/4"
   Amp: fill="lightblue" label="'IF\namplifier'"
   Line: length="d.unit/4"
-  Demod: anchor="W" fill="navajowhite" label="'Demodulator' loc='bottom' ofst=.2"
+  Demod: anchor="W" fill="navajowhite" label="'Demodulator' loc=bottom ofst=.2"
   Arrow: right="d.unit/3"
 }
 ```
@@ -2228,7 +2228,7 @@ with schemdraw.Drawing() as d:
 ```fleming
 circuit {
   Antenna:
-  Arrow: right="d.unit/2" label="'$f_{RF}$' loc='bot'"
+  Arrow: right="d.unit/2" label="'$f_{RF}$' loc=bot"
   Amp: label="LNA"
   Line: right="d.unit/5" dot
   hold {
@@ -2238,7 +2238,7 @@ circuit {
     }
     Arrow: length="d.unit/2"
     lpf1 {
-      Filter: response="lp" label="'LPF' loc='bot' ofst=.2"
+      Filter: response="lp" label="'LPF' loc=bot ofst=.2"
     }
     Line: length="d.unit/6"
     adc1 {
@@ -2256,7 +2256,7 @@ circuit {
     Mixer: label="'Mixer' ofst=0"
   }
   Arrow: tox="lpf1.W"
-  Filter: response="lp" label="'LPF' loc='bot' ofst=.2"
+  Filter: response="lp" label="'LPF' loc=bot ofst=.2"
   Line: tox="adc1.W"
   Adc: label="ADC"
   Arrow: to="dsp1.inL1"
@@ -2264,11 +2264,11 @@ circuit {
   Line: left="d.unit*1.25"
   Line: down="d.unit*.75"
   flo {
-    Dot: label="'$f_{LO}$' loc='left'"
+    Dot: label="'$f_{LO}$' loc=left"
   }
   hold {
     Line: down="d.unit/5"
-    Oscillator: right anchor="N" label="'LO' loc='left' ofst=.15"
+    Oscillator: right anchor="N" label="'LO' loc=left ofst=.15"
   }
   Arrow: down="d.unit/4" reverse at="mix2.S"
   b1 {
@@ -2334,10 +2334,10 @@ with schemdraw.Drawing() as d:
 ```fleming
 circuit {
   config: unit="1" fontsize="14"
-  Line: length="d.unit*2" label="'x[n]' loc='left'" dot
+  Line: length="d.unit*2" label="'x[n]' loc=left" dot
   hold {
     Line: right
-    Amp: label="'$b_0$' loc='bottom'"
+    Amp: label="'$b_0$' loc=bottom"
     Arrow: right
     s0 {
       Sum: anchor="W"
@@ -2348,7 +2348,7 @@ circuit {
   Line: length="d.unit/2" dot
   hold {
     Line: right
-    Amp: label="'$b_1$' loc='bottom'"
+    Amp: label="'$b_1$' loc=bottom"
     Arrow: right
     s1 {
       Sum: anchor="W"
@@ -2358,7 +2358,7 @@ circuit {
   Square: label="'$z^{-1}$'"
   Line: length="d.unit*.75"
   Line: right
-  Amp: label="'$b_2$' loc='bottom'"
+  Amp: label="'$b_2$' loc=bottom"
   Arrow: right
   s2 {
     Sum: anchor="W"
@@ -2367,7 +2367,7 @@ circuit {
   Arrow: at="s1.N" toy="s0.S"
   Line: right="d.unit*2.75" at="s0.E" dot
   hold {
-    Arrow: right label="'y[n]' loc='right'"
+    Arrow: right label="'y[n]' loc=right"
   }
   Arrow: down
   Square: label="'$z^{-1}$'"
@@ -2375,7 +2375,7 @@ circuit {
   hold {
     Line: left
     a1 {
-      Amp: label="'$-a_1$' loc='bottom'"
+      Amp: label="'$-a_1$' loc=bottom"
     }
     Arrow: at="a1.out" tox="s1.E"
   }
@@ -2384,7 +2384,7 @@ circuit {
   Line: length="d.unit*.75"
   Line: left
   a2 {
-    Amp: label="'$-a_2$' loc='bottom'"
+    Amp: label="'$-a_2$' loc=bottom"
   }
   Arrow: at="a2.out" tox="s2.E"
 }

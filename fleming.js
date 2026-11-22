@@ -1844,9 +1844,11 @@
       if (seen.has(key)) throw new Error(`Duplicate label argument: ${key}`);
       seen.add(key);
       if (key === 'loc') {
-        // Schemdraw's _position_label accepts these aliases.
-        const locAlias = { bot: 'bot', bottom: 'bot', B: 'bot', lft: 'left', L: 'left', rgt: 'right', R: 'right', T: 'top' }[word] || word;
-        if (!['top', 'bot', 'left', 'right', 'start', 'end', 'istart', 'iend', 'base', 'collector', 'emitter', 'center', 'C2', 'gate', 'source', 'drain', 'bulk', 'name', 'in1', 'in2', 'out', 'c', 'cbar', 'display', 'vd', 'vs', 'n1', 'n2', 'n1a', 'n2a'].includes(locAlias) && !/^in\d+$/.test(locAlias) && !/^p\d+(?:_in)?$/.test(locAlias) && !/^(?:N|S|E|W|NE|NW|SE|SW)$/.test(locAlias)) throw new Error(`Invalid label location: ${word}`);
+        // Schemdraw's _position_label accepts these aliases. `bottom` is kept
+        // as its own spelling (not folded into `bot`), so that what the caller
+        // wrote survives validation and the angle swap in _position_label.
+        const locAlias = { bot: 'bot', B: 'bot', lft: 'left', L: 'left', rgt: 'right', R: 'right', T: 'top' }[word] || word;
+        if (!['top', 'bot', 'bottom', 'left', 'right', 'start', 'end', 'istart', 'iend', 'base', 'collector', 'emitter', 'center', 'C2', 'gate', 'source', 'drain', 'bulk', 'name', 'in1', 'in2', 'out', 'c', 'cbar', 'display', 'vd', 'vs', 'n1', 'n2', 'n1a', 'n2a'].includes(locAlias) && !/^in\d+$/.test(locAlias) && !/^p\d+(?:_in)?$/.test(locAlias) && !/^(?:N|S|E|W|NE|NW|SE|SW)$/.test(locAlias)) throw new Error(`Invalid label location: ${word}`);
         label.loc = locAlias;
       } else if (key === 'halign') {
         if (!['left', 'center', 'right'].includes(word)) throw new Error(`Invalid label alignment: ${word}`);
@@ -4860,7 +4862,7 @@
         const rightDefault = ['Bjt', 'BjtNpn', 'BjtPnp', 'BjtPnp2c', 'NpnSchottky', 'PnpSchottky',
           'IgbtN', 'IgbtP', 'NpnPhoto', 'PnpPhoto', 'NMos', 'PMos', 'CurrentMirror', 'VoltageMirror'].includes(type);
         const leftDefault = ['JFet', 'JFetN', 'JFetP', 'Hemt', 'NFet', 'PFet', 'AnalogNFet', 'AnalogPFet', 'AnalogBiasedFet'].includes(type);
-        const transistorDefaultLoc = rightDefault ? 'right' : leftDefault ? 'left' : 'bot';
+        const transistorDefaultLoc = rightDefault ? 'right' : leftDefault ? 'left' : 'bottom';
         for (const label of labels) {
           if (label.items) throw new Error(`${type} does not support list labels.`);
           // `ofst` moves the label away from the bbox edge (default lblofst 0.1).
@@ -5436,7 +5438,7 @@
         const extF = sy2 === -1 ? [-ext[1], -ext[0]] : ext;
         const xextF = sx === -1 ? [-xext[1], -xext[0]] : xext;
         for (const label of labels) {
-          let loc = label.loc || (['Vss', 'NoConnect'].includes(type) ? 'bot' : 'top');
+          let loc = label.loc || (['Vss', 'NoConnect'].includes(type) ? 'bottom' : 'top');
           const normalizedTheta = ((theta % 360) + 360) % 360;
           // Schemdraw keeps the label on the same visual side: flip the side
           // when the element points left/down.
@@ -6685,8 +6687,10 @@
           continue;
         }
         let loc = label.loc || (['BjtNpn2', 'BjtPnp2', 'BjtPnp2c2', 'NMos2', 'PMos2', 'NFet2', 'PFet2', 'JFetN2', 'JFetP2'].includes(type)
-          ? (arbitraryAngle ? 'top' : dy ? 'left' : ('flip' in options ? 'top' : 'bot'))
-          : ((['Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE', 'LED', 'LED2', 'Photodiode'].includes(type)) && !dy) ? 'bot' : arbitraryAngle ? 'top' : dy ? 'left' : 'top');
+          ? (arbitraryAngle ? 'top' : dy ? 'left' : ('flip' in options ? 'top' : 'bottom'))
+          : ((['Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE', 'LED', 'LED2', 'Photodiode'].includes(type)) && !dy) ? 'bottom' : arbitraryAngle ? 'top' : dy ? 'left' : 'top');
+        // The defaults above are spelled `bottom`; the 2-terminal placement
+        // below uses `bot` for the side checks, so fold once here.
         if (loc === 'bottom') loc = 'bot';
         // Schemdraw keeps `top`/`bottom` on the same visual side: for an element
         // pointing up or down they are the long sides, not above/below.

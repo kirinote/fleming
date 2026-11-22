@@ -5211,8 +5211,27 @@
           bounds(lx - width, ly - 18, lx + width, ly + 8);
           elements.push(`<text x="${lx}" y="${ly}" text-anchor="${anchor}"${textFill} font-family="sans-serif" font-size="${labelSize}">${labelContent(label.text)}</text>`);
         }
-        const span = type === 'OutletA' || type === 'OutletB' ? 56 : 48;
-        bounds(x - span, y - span, x + span, y + span);
+        // The viewport must follow the shape actually drawn: OutletJ's hexagon
+        // is 3.3 units wide and OutletL's box 2.97 units wide, both wider than
+        // a fixed 48px box, so they were clipped at the SVG edges.
+        let exmin = 0, exmax = 0, eymin = 0, eymax = 0;
+        let edge = false;
+        for (const seg of def.segments) {
+          const verts = seg.type === 'circle' ? [seg.c] : seg.verts;
+          for (const [vx, vy] of verts) {
+            const r = seg.type === 'circle' ? seg.r * P : 0;
+            exmin = Math.min(exmin, vx * P - r); exmax = Math.max(exmax, vx * P + r);
+            eymin = Math.min(eymin, -vy * P - r); eymax = Math.max(eymax, -vy * P + r);
+            if (seg.fill !== undefined) edge = true;
+          }
+        }
+        // Open shapes (the unfilled body) carry their ink on the stroke, so the
+        // box grows by the 1px half-width just as Schemdraw's segment bbox and
+        // the text/label paths here do.
+        const stroke = edge ? 0 : 1;
+        if (sx < 0) [exmin, exmax] = [exmax, exmin];
+        if (sy2 < 0) [eymin, eymax] = [eymax, eymin];
+        bounds(x + exmin - stroke, y + eymin - stroke, x + exmax + stroke, y + eymax + stroke);
         if (name) {
           const out = Object.create(null);
           for (const key of Object.keys(def.anchors)) out[key] = [x + sx * def.anchors[key][0] * P, y - sy2 * def.anchors[key][1] * P];

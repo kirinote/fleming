@@ -2015,14 +2015,14 @@ with schemdraw.Drawing() as d:
 circuit {
   Q {
     IcDIP: pins="8",
-     label="'Offset Null' loc=p1 fontsize=10",
-     label="'Inverting Input' loc=p2 fontsize=10",
-     label="'Non-inverting Input' loc=p3 fontsize=10",
-     label="'V-' loc=p4 fontsize=10",
-     label="'Offset Null' loc=p5 fontsize=10",
-     label="'Output' loc=p6 fontsize=10",
-     label="'V+' loc=p7 fontsize=10",
-     label="'NC' loc=p8 fontsize=10",
+           label="'Offset Null' loc=p1 fontsize=10",
+           label="'Inverting Input' loc=p2 fontsize=10",
+           label="'Non-inverting Input' loc=p3 fontsize=10",
+           label="'V-' loc=p4 fontsize=10",
+           label="'Offset Null' loc=p5 fontsize=10",
+           label="'Output' loc=p6 fontsize=10",
+           label="'V+' loc=p7 fontsize=10",
+           label="'NC' loc=p8 fontsize=10",
   }
   Line: at="Q.p2_in" length="d.unit/5"
   op {

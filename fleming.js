@@ -1852,8 +1852,10 @@
         if (!['left', 'center', 'right'].includes(word)) throw new Error(`Invalid label alignment: ${word}`);
         label.halign = word;
       } else if (key === 'valign') {
-        if (!['top', 'center', 'bottom'].includes(word)) throw new Error(`Invalid label alignment: ${word}`);
-        label.valign = word;
+        // `bot` is the same shorthand accepted by `loc`.
+        const valign = word === 'bot' ? 'bottom' : word;
+        if (!['top', 'center', 'bottom'].includes(valign)) throw new Error(`Invalid label alignment: ${word}`);
+        label.valign = valign;
       } else if (key === 'color') {
         label.color = readColor(word);
       } else if (key === 'fontsize') {
@@ -7010,11 +7012,20 @@
           if (!directive) throw new Error(`Unsupported directive: ${line}`);
           const settings = Object.create(null);
           for (const part of (directive[1] || '').split(/\s+/).filter(Boolean)) {
-            const match = /^(rows|cols)=(\d+)$/.exec(part);
+            const match = /^([A-Za-z]+)=(.+)$/.exec(part);
             if (!match || Object.prototype.hasOwnProperty.call(settings, match[1])) throw new Error(`Invalid @layout parameter: ${part}`);
-            const value = Number(match[2]);
+            const key = match[1], raw = match[2];
+            // valign picks how the circuits in a row line up when their
+            // heights differ: top (default) or bottom/bot (title baselines).
+            if (key === 'valign') {
+              if (raw !== 'top' && raw !== 'bottom' && raw !== 'bot') throw new Error(`@layout valign must be top, bottom or bot: ${raw}`);
+              settings.valign = raw === 'bot' ? 'bottom' : raw;
+              continue;
+            }
+            if ((key !== 'rows' && key !== 'cols') || !/^\d+$/.test(raw)) throw new Error(`Invalid @layout parameter: ${part}`);
+            const value = Number(raw);
             if (!Number.isSafeInteger(value) || value < 1) throw new Error('@layout rows and columns must be positive integers.');
-            settings[match[1]] = value;
+            settings[key] = value;
           }
           if (!('rows' in settings) && !('cols' in settings)) throw new Error('@layout requires rows or cols.');
           layout = settings;
@@ -7130,16 +7141,32 @@
       return applyScale(addTitle(renderCircuit(selected[0], log, subs), titles && titles[0]), scale);
     }
     const children = selected.map((block, i) => {
-      const svg = addTitle(renderCircuit(block, log, subs), titles && titles[i]);
-      return { svg, ...viewBoxSize(svg) };
+      const circuitSvg = renderCircuit(block, log, subs);
+      const body = viewBoxSize(circuitSvg);
+      const svg = addTitle(circuitSvg, titles && titles[i]);
+      return { svg, ...viewBoxSize(svg), bodyHeight: body.height };
     });
     const usedCols = Math.min(cols, children.length);
     const usedRows = Math.ceil(children.length / usedCols);
     const widths = Array(usedCols).fill(0), heights = Array(usedRows).fill(0);
+    const bodyHeights = Array(usedRows).fill(0);
     children.forEach((child, i) => {
+      const row = Math.floor(i / usedCols);
       widths[i % usedCols] = Math.max(widths[i % usedCols], child.width);
-      heights[Math.floor(i / usedCols)] = Math.max(heights[Math.floor(i / usedCols)], child.height);
+      heights[row] = Math.max(heights[row], child.height);
+      bodyHeights[row] = Math.max(bodyHeights[row], child.bodyHeight);
     });
+    // valign=bottom lines up the circuit bodies (not the title bands) along the
+    // bottom of each row, so titles with the same 24px offset share a baseline.
+    const alignBottom = layout !== null && layout.valign === 'bottom';
+    if (alignBottom) {
+      // A shorter circuit moves down by the row's body-height difference, so its
+      // title band may extend below the tallest child's own height.
+      children.forEach((child, i) => {
+        const row = Math.floor(i / usedCols);
+        heights[row] = Math.max(heights[row], child.height + bodyHeights[row] - child.bodyHeight);
+      });
+    }
     const gap = 24;
     const offsets = lengths => {
       let total = 0;
@@ -7148,7 +7175,9 @@
     };
     const horizontal = offsets(widths), vertical = offsets(heights);
     const content = children.map((child, i) => {
-      const x = horizontal.positions[i % usedCols], y = vertical.positions[Math.floor(i / usedCols)];
+      const row = Math.floor(i / usedCols);
+      const x = horizontal.positions[i % usedCols];
+      const y = vertical.positions[row] + (alignBottom ? bodyHeights[row] - child.bodyHeight : 0);
       return setSvgAttributes(child.svg, {
         x: String(x), y: String(y),
         width: String(child.width), height: String(child.height),

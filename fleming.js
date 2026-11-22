@@ -4733,13 +4733,13 @@
         definition = { ...definition, anchors, segments, defaultDrop: type === 'AnalogPFet' ? 'drain' : 'source' };
       }
       if (definition && definition.transistor) {
-        const modes = ['at', 'anchor', 'theta', 'color', 'drop', 'flip', 'reverse',
+        const modes = ['at', 'anchor', 'theta', 'color', 'drop', 'hold', 'flip', 'reverse',
           ...(definition.analog ? ['bulk', 'offset_gate', 'source_arrow'] : []),
           ...(['NMos', 'PMos'].includes(type) ? ['diode'] : []),
           ...(['NFet', 'PFet'].includes(type) ? ['bulk'] : []),
           ...(definition.extendable || ['BjtNpn', 'BjtPnp', 'BjtPnp2c', 'JFetN', 'JFetP', 'NMos', 'PMos'].includes(type) ? ['circle'] : []),
           ...(definition.hemt ? ['split', 'source_arrow'] : [])];
-        if (length !== null || Object.keys(options).some(key => !modes.includes(key))) throw new Error(`${type} supports at, anchor, direction, theta, color, drop, flip, reverse, and terminal labels.`);
+        if (length !== null || Object.keys(options).some(key => !modes.includes(key))) throw new Error(`${type} supports at, anchor, direction, theta, color, drop, hold, flip, reverse, and terminal labels.`);
         if ('anchor' in options && typeof options.anchor !== 'string') throw new Error('anchor must specify a terminal name.');
         if ('theta' in options) {
           const degrees = ((Number(options.theta) % 360) + 360) % 360;
@@ -4755,6 +4755,10 @@
           flip: 'flip' in options,
           reverse: 'reverse' in options
         });
+        // Element.hold() (schemdraw element.py): restore the drawing position and
+        // direction saved before placement. This is a full state pop, unlike the
+        // two-terminal hold that keeps the element's own direction.
+        const heldState = 'hold' in options ? [x, y, direction] : null;
         const drop = options.drop === undefined ? definition.defaultDrop : options.drop;
         if (!Object.prototype.hasOwnProperty.call(anchors, drop)) throw new Error(`Unknown ${type} drop: ${drop}`);
         // Schemdraw's xy anchor is the unreflected local origin moved by .anchor().
@@ -4916,6 +4920,7 @@
           namedReversed[name] = 'reverse' in options;
         }
         [x, y] = anchors[drop];
+        if (heldState) [x, y, direction] = heldState;
         log(`${type}: drop=${drop}`);
         continue;
       }

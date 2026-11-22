@@ -1535,6 +1535,32 @@
     return result;
   }
 
+  // Arguments whose value is a keyword of the grammar, not free text. They are
+  // written without quotes (`leads=True`), and only one spelling is accepted so
+  // that the notation stays learnable. Inside `label`, `loc`/`halign`/`valign`/
+  // `color` follow the same rule (`loc=bot`, not `loc="bot"`).
+  const BOOLEAN_WORD_ARGS = new Set([
+    'leads', 'lead', 'flip', 'reverse', 'hold', 'idot', 'dot', 'polar', 'core',
+    'circle', 'diode', 'bulk', 'sign', 'open', 'contacts', 'nc', 'link', 'notch',
+    'number', 'shownumber', 'cathode', 'anode'
+  ]);
+
+  function quotedValueError(key, value) {
+    return new Error(`${key} takes a keyword, not a quoted string: write ${key}=${value} instead of ${key}="${value}".`);
+  }
+
+  // `label="'x' loc="bot""` cannot work: the inner quotes close the label text
+  // early. Detect `loc="`/`halign="`/... after a `label=` on the line so the
+  // caller can explain the keyword spelling rule instead of a bare parse error.
+  // Escaped forms (`loc=\"bot\"`) keep the backslash and are reported later.
+  function earlyQuotedKeyword(input) {
+    const start = input.indexOf('label=');
+    if (start < 0) return false;
+    const after = input.slice(start);
+    return ['loc', 'halign', 'valign', 'color', 'ofst', 'rotate', 'fontsize']
+      .some(key => after.indexOf(key + '="') >= 0);
+  }
+
   // Replace top-level commas with spaces and reject empty arguments
   // (`Type:,`, `right,,`, leading commas). Commas inside quotes or brackets
   // are left for the value parsers, which report a specific error.
@@ -1614,9 +1640,15 @@
           const rest = input.slice(at).trim();
           // `;` is not part of the grammar: fleming has no statement terminator.
           if (rest.startsWith(';')) throw new Error(`Line ${lineLabel}: syntax error. \`;\` is not used in fleming notation; separate arguments with whitespace or commas.`);
+          // A quoted label argument that broke at an inner `"` is reported with the
+          // keyword spelling rule rather than as a generic parse failure.
+          // `label="'x' loc="bot""` lets the inner quotes close the label text
+          // early; report the keyword spelling rule instead of a bare parse error.
+          if (earlyQuotedKeyword(input)) throw new Error(
+            `Line ${lineLabel}: label arguments take keywords, not quoted strings (write loc=bot, not loc="bot").`);
           throw new Error(`Line ${lineLabel}: cannot parse arguments: ${rest}`);
         }
-        let value = m[2];
+        let value = m[2], quoted = m[2] !== undefined;
         if (value === undefined) {
           if (m[3] === undefined) {
             args.push({ key: m[1], value: undefined });
@@ -1639,7 +1671,7 @@
         } else {
           value = value.replace(/\\\\|\\"/g, s => s === '\\"' ? '"' : s);
         }
-        args.push({ key: m[1], value });
+        args.push(quoted ? { key: m[1], value, quoted: true } : { key: m[1], value });
       }
       const namedFrame = frames.find(frame => frame.kind === 'name');
       if (namedFrame) namedFrame.count++;
@@ -1782,8 +1814,8 @@
   }
 
   // Parse the arguments that may follow a label's text, e.g. `loc='bot'`.
-  function readLabelArgs(label, rest, value) {
-    const seen = new Set();
+  function readLabelArgs(label, rest, value) {    const seen = new Set();
+    let word = null;
     while (rest) {
       const separator = /^\s+/.exec(rest);
       if (!separator) throw new Error(`Invalid label argument: ${value}`);
@@ -1792,36 +1824,44 @@
         break;
       }
       if (/^ofst\s*=\s*\([^)]*,/.test(rest)) throw new Error(`Invalid label offset: separate x and y with whitespace, not a comma: ${value}`);
-      const arg = /^(loc|halign|valign|color)\s*=\s*'([\w#]+)'|^(ofst)\s*=\s*\(\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s+([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*\)|^(ofst|rotate|fontsize)\s*=\s*(True|False|[+-]?(?:\d+(?:\.\d*)?|\.\d+))/.exec(rest);
+      const arg = /^(loc|halign|valign|color)\s*=\s*(?:'([\w#]+)'|([\w#]+))|^(ofst)\s*=\s*\(\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s+([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*\)|^(ofst|rotate|fontsize)\s*=\s*(True|False|[+-]?(?:\d+(?:\.\d*)?|\.\d+))/.exec(rest);
       if (!arg) throw new Error(`Invalid label argument: ${value}`);
-      const key = arg[1] || arg[3] || arg[6];
+      // `loc`, `halign`, `valign` and `color` take a keyword: `loc=bot`, never `loc="bot"`.
+      const quotedValue = /^(loc|halign|valign|color)\s*=\s*"([\w#]+)"/.exec(rest);
+      if (quotedValue) throw quotedValueError(quotedValue[1], quotedValue[2]);
+      // `ofst=(x y)` keeps its key in group 4; the keyword/number forms use 1 or 7.
+      const key = arg[4] ? 'ofst' : arg[1] || arg[7];
+      // `loc=left` without quotes reads like a bare keyword inside the label value.
+      // Quoted values land in group 2, unquoted ones in group 3, numbers in group 8.
+      word = arg[2] !== undefined ? arg[2] : arg[3] !== undefined ? arg[3] : arg[8];
       if (seen.has(key)) throw new Error(`Duplicate label argument: ${key}`);
       seen.add(key);
       if (key === 'loc') {
         // Schemdraw's _position_label accepts these aliases.
-        const locAlias = { bot: 'bot', bottom: 'bot', B: 'bot', lft: 'left', L: 'left', rgt: 'right', R: 'right', T: 'top' }[arg[2]] || arg[2];
-        if (!['top', 'bot', 'left', 'right', 'start', 'end', 'istart', 'iend', 'base', 'collector', 'emitter', 'center', 'C2', 'gate', 'source', 'drain', 'bulk', 'name', 'in1', 'in2', 'out', 'c', 'cbar', 'display', 'vd', 'vs', 'n1', 'n2', 'n1a', 'n2a'].includes(locAlias) && !/^in\d+$/.test(locAlias) && !/^p\d+(?:_in)?$/.test(locAlias) && !/^(?:N|S|E|W|NE|NW|SE|SW)$/.test(locAlias)) throw new Error(`Invalid label location: ${arg[2]}`);
+        const locAlias = { bot: 'bot', bottom: 'bot', B: 'bot', lft: 'left', L: 'left', rgt: 'right', R: 'right', T: 'top' }[word] || word;
+        if (!['top', 'bot', 'left', 'right', 'start', 'end', 'istart', 'iend', 'base', 'collector', 'emitter', 'center', 'C2', 'gate', 'source', 'drain', 'bulk', 'name', 'in1', 'in2', 'out', 'c', 'cbar', 'display', 'vd', 'vs', 'n1', 'n2', 'n1a', 'n2a'].includes(locAlias) && !/^in\d+$/.test(locAlias) && !/^p\d+(?:_in)?$/.test(locAlias) && !/^(?:N|S|E|W|NE|NW|SE|SW)$/.test(locAlias)) throw new Error(`Invalid label location: ${word}`);
         label.loc = locAlias;
       } else if (key === 'halign') {
-        if (!['left', 'center', 'right'].includes(arg[2])) throw new Error(`Invalid label alignment: ${arg[2]}`);
-        label.halign = arg[2];
+        if (!['left', 'center', 'right'].includes(word)) throw new Error(`Invalid label alignment: ${word}`);
+        label.halign = word;
       } else if (key === 'valign') {
-        if (!['top', 'center', 'bottom'].includes(arg[2])) throw new Error(`Invalid label alignment: ${arg[2]}`);
-        label.valign = arg[2];
+        if (!['top', 'center', 'bottom'].includes(word)) throw new Error(`Invalid label alignment: ${word}`);
+        label.valign = word;
       } else if (key === 'color') {
-        label.color = readColor(arg[2]);
+        label.color = readColor(word);
       } else if (key === 'fontsize') {
-        label.fontsize = Number(arg[7]);
+        label.fontsize = Number(arg[8]);
         if (!Number.isFinite(label.fontsize) || label.fontsize <= 0) throw new Error('label fontsize must be a finite positive number.');
       } else if (key === 'ofst') {
-        if (arg[3]) label.ofst = [Number(arg[4]), Number(arg[5])];
+        // `ofst=(x y)` fills groups 5–6; a bare number fills group 8.
+        if (arg[5] !== undefined) label.ofst = [Number(arg[5]), Number(arg[6])];
         else {
-          if (arg[7] === 'True' || arg[7] === 'False') throw new Error(`Invalid label offset: ${value}`);
-          label.ofst = Number(arg[7]);
+          if (arg[8] === 'True' || arg[8] === 'False') throw new Error(`Invalid label offset: ${value}`);
+          label.ofst = Number(arg[8]);
         }
         if (!(Array.isArray(label.ofst) ? label.ofst.every(Number.isFinite) : Number.isFinite(label.ofst))) throw new Error(`Invalid label offset: ${value}`);
       } else {
-        label.rotate = arg[7] === 'True' ? true : arg[7] === 'False' ? false : Number(arg[7]);
+        label.rotate = arg[8] === 'True' ? true : arg[8] === 'False' ? false : Number(arg[8]);
         if (typeof label.rotate === 'number' && !Number.isFinite(label.rotate)) throw new Error(`Invalid label rotation: ${value}`);
       }
       rest = rest.slice(arg[0].length);
@@ -2408,7 +2448,10 @@
       if (name && Object.prototype.hasOwnProperty.call(names, name)) throw new Error(`Duplicate component name: ${name}`);
       const options = Object.create(null), labels = [];
       let selectedDirection = null, length = null;
-      for (const { key, value } of args) {
+      for (const { key, value, quoted } of args) {
+        // Keyword-valued arguments have exactly one spelling: the value is a bare
+        // word (leads=True), never a quoted string (leads="True").
+        if (quoted && BOOLEAN_WORD_ARGS.has(key) && (value === 'True' || value === 'False')) throw quotedValueError(key, value);
         if (Object.prototype.hasOwnProperty.call(directions, key)) {
           if (selectedDirection) throw new Error('Only one direction may be specified.');
           selectedDirection = key;

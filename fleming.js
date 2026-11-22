@@ -732,7 +732,126 @@
       'MeterArrow', 'SourceControlled', 'SourceControlledV', 'SourceControlledI', 'Motor'].includes(type)) return [18, 18];
     const def = twoTerminalParts[type];
     if (def && def.extent) return [Math.abs(def.extent[2]), Math.abs(def.extent[3])];
+    const standalone = standaloneExtent(type);
+    if (standalone) return standalone;
     return [9, 9];
+  }
+
+  // Local bbox of the parts handled by the generic Element2Term-like label
+  // path. Values are px above/below the terminal line and come from
+  // Schemdraw 0.23's get_bbox() for the unflipped element.
+  function standaloneExtent(type) {
+    if (type === 'Zener') return [12.6, 12.6];
+    if (type === 'LED') return [35.01, 9];
+    if (type === 'Diac') return [18, 18];
+    if (['Fuse', 'FuseIEC', 'FuseIEEE'].includes(type)) return [9, 9];
+    if (['Battery', 'BatteryCell', 'BatteryDouble'].includes(type)) return [13.5, 13.5];
+    if (type === 'SourceI') return [18, 18];
+    if (type === 'Breaker') return [11.7, 4.32];
+    if (type === 'Motor') return [18, 18];
+    if (['BjtNpn2', 'BjtPnp2', 'BjtPnp2c2'].includes(type)) return [28.62, 7.2];
+    if (['NMos2', 'PMos2'].includes(type)) return [6, 30];
+    if (['NFet2', 'PFet2'].includes(type)) return [49.2, 0];
+    if (['JFetN2', 'JFetP2'].includes(type)) return [36, 0];
+    return null;
+  }
+
+  // Mirror a local bbox (drawing units, y up) the way Schemdraw's
+  // Element._flipreverse() mirrors segments: `flip` is about y = 0, `reverse`
+  // about the element centre (its `center` anchor, else the bbox centre).
+  function reflectBBox(bbox, options = {}, center = null) {
+    let { xmin, ymin, xmax, ymax } = bbox;
+    if ('reverse' in options) {
+      const cx = center == null ? (xmin + xmax) / 2 : center;
+      [xmin, xmax] = [2 * cx - xmax, 2 * cx - xmin];
+    }
+    if ('flip' in options) [ymin, ymax] = [-ymax, -ymin];
+    return { xmin, ymin, xmax, ymax };
+  }
+
+  // Element._place_label applies flip/reverse to explicit label alignment and
+  // to an (x y) offset before positioning the label. Return a copy so the
+  // user's label spec is not mutated.
+  function reflectLabelHints(label, options = {}) {
+    let halign = label.halign, valign = label.valign, ofst = label.ofst;
+    if ('flip' in options) {
+      if (valign) valign = { top: 'bottom', bottom: 'top' }[valign] || valign;
+      if (Array.isArray(ofst)) ofst = [ofst[0], -ofst[1]];
+    }
+    if ('reverse' in options) {
+      if (halign) halign = { left: 'right', right: 'left' }[halign] || halign;
+      if (Array.isArray(ofst)) ofst = [-ofst[0], ofst[1]];
+    }
+    return Object.assign({}, label, { halign, valign, ofst });
+  }
+
+  // Port of Element._position_label + _align_label for a local bbox given in
+  // drawing units (y up). Returns the anchor in the same local frame plus the
+  // alignment that Schemdraw's text_tosvg uses.
+  function localLabelPlacement(label, bbox, theta, defaultLoc = 'top', defaultOfst = 0.1, anchors = null) {
+    let loc = label.loc || defaultLoc;
+    loc = { bot: 'bottom', B: 'bottom', lft: 'left', L: 'left', rgt: 'right', R: 'right', T: 'top' }[loc] || loc;
+    const degrees = ((theta % 360) + 360) % 360;
+    if (degrees > 90 && degrees <= 270) {
+      loc = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' }[loc] || loc;
+    }
+    let rotate = label.rotate;
+    if (rotate === true) {
+      rotate = degrees;
+      if (rotate > 90 && rotate < 270) rotate -= 180;
+    } else if (typeof rotate === 'number') rotate = ((rotate % 360) + 360) % 360;
+    else rotate = 0;
+    const { xmin, ymin, xmax, ymax } = bbox;
+    let ax, ay, halign, valign;
+    let anchorLoc = false;
+    if (loc === 'center') {
+      ax = (xmin + xmax) / 2;
+      ay = (ymin + ymax) / 2;
+      halign = 'center';
+      valign = 'center';
+    } else if (anchors && Object.prototype.hasOwnProperty.call(anchors, loc)) {
+      // Schemdraw's _align_label anchor branch: align away from the bbox edge
+      // the anchor sits on (abs_tol .15), then turn a scalar ofst into a
+      // directional (x, y) offset.
+      anchorLoc = true;
+      [ax, ay] = anchors[loc];
+      const tol = 0.15;
+      halign = Math.abs(ax - xmin) <= tol ? 'right' : Math.abs(ax - xmax) <= tol ? 'left' : 'center';
+      valign = Math.abs(ay - ymin) <= tol ? 'top' : Math.abs(ay - ymax) <= tol ? 'bottom' : 'center';
+    } else if (loc === 'top' || loc === 'bottom' || loc === 'left' || loc === 'right') {
+      if (loc === 'top') { ax = (xmin + xmax) / 2; ay = ymax; }
+      else if (loc === 'bottom') { ax = (xmin + xmax) / 2; ay = ymin; }
+      else if (loc === 'left') { ax = xmin; ay = (ymin + ymax) / 2; }
+      else { ax = xmax; ay = (ymin + ymax) / 2; }
+      const th = ((degrees - rotate
+        + (loc === 'left' ? 90 : loc === 'bottom' ? 180 : loc === 'right' ? 270 : 0)) % 360 + 360) % 360;
+      [halign, valign] = [
+        ['center', 'bottom'], ['right', 'bottom'], ['right', 'center'], ['right', 'top'],
+        ['center', 'top'], ['left', 'top'], ['left', 'center'], ['left', 'bottom']
+      ][Math.round(th / 45) % 8];
+    } else {
+      throw new Error(`Unsupported label location: ${loc}`);
+    }
+    const ofst = label.ofst == null ? defaultOfst : label.ofst;
+    let ox = 0, oy = 0;
+    if (Array.isArray(ofst)) { ox = ofst[0]; oy = ofst[1]; }
+    else if (loc === 'center') { ox = ofst; oy = ofst; }
+    else if (anchorLoc) {
+      [ox, oy] = ({
+        'center-bottom': [0, ofst], 'right-bottom': [-ofst, ofst], 'right-center': [-ofst, 0],
+        'right-top': [-ofst, -ofst], 'center-top': [0, -ofst], 'left-top': [ofst, -ofst],
+        'left-center': [ofst, 0], 'left-bottom': [ofst, ofst]
+      }[`${halign}-${valign}`] || [0, ofst]);
+    }
+    else if (loc === 'bottom') oy = -ofst;
+    else if (loc === 'left') ox = -ofst;
+    else if (loc === 'right') ox = ofst;
+    else oy = ofst;
+    return {
+      x: ax + ox, y: ay + oy, rotate,
+      halign: label.halign || halign,
+      valign: label.valign || valign
+    };
   }
 
   // Local anchors of a two-terminal element, in the element's unrotated SVG
@@ -1848,7 +1967,7 @@
         // as its own spelling (not folded into `bot`), so that what the caller
         // wrote survives validation and the angle swap in _position_label.
         const locAlias = { bot: 'bot', B: 'bot', lft: 'left', L: 'left', rgt: 'right', R: 'right', T: 'top' }[word] || word;
-        if (!['top', 'bot', 'bottom', 'left', 'right', 'start', 'end', 'istart', 'iend', 'base', 'collector', 'emitter', 'center', 'C2', 'gate', 'source', 'drain', 'bulk', 'name', 'in1', 'in2', 'out', 'c', 'cbar', 'display', 'vd', 'vs', 'n1', 'n2', 'n1a', 'n2a'].includes(locAlias) && !/^in\d+$/.test(locAlias) && !/^p\d+(?:_in)?$/.test(locAlias) && !/^(?:N|S|E|W|NE|NW|SE|SW)$/.test(locAlias)) throw new Error(`Invalid label location: ${word}`);
+        if (!['top', 'bot', 'bottom', 'left', 'right', 'start', 'end', 'istart', 'iend', 'base', 'collector', 'emitter', 'center', 'C2', 'gate', 'source', 'drain', 'bulk', 'name', 'in1', 'in2', 'out', 'c', 'cbar', 'display', 'vd', 'vs', 'n1', 'n2', 'n1a', 'n2a', 'a', 'b'].includes(locAlias) && !/^in\d+$/.test(locAlias) && !/^p\d+(?:_in)?$/.test(locAlias) && !/^(?:N|S|E|W|NE|NW|SE|SW)$/.test(locAlias)) throw new Error(`Invalid label location: ${word}`);
         label.loc = locAlias;
       } else if (key === 'halign') {
         if (!['left', 'center', 'right'].includes(word)) throw new Error(`Invalid label alignment: ${word}`);
@@ -2100,7 +2219,7 @@
     let bbox = { xmin: 0, ymin: 0, xmax: 0, ymax: 0 };
     let defaultLoc = 'center', defaultOfst = 0, dropPoint = null;
     // Constructor arguments per element, as in dsp.py / flow.Box.
-    const allowed = ['at', 'anchor', 'theta', 'color', 'drop', 'hold', 'fill',
+    const allowed = ['at', 'anchor', 'theta', 'color', 'drop', 'hold', 'fill', 'flip', 'reverse',
       ...(type === 'Box' ? ['w', 'h', 'minsize', 'pad'] : []),
       ...(['Circle', 'Sum', 'SumSigma', 'Mixer', 'Oscillator', 'Circulator'].includes(type) ? ['radius'] : []),
       ...(type === 'Mixer' ? ['N', 'E', 'S', 'W', 'fontsize'] : []),
@@ -4553,10 +4672,15 @@
       if (labels.some(label => label.items && label.loc != null && !['top', 'bot', 'bottom', 'left', 'right', 'center'].includes(label.loc))) throw new Error('List labels support loc top, bot, left, right, or center.');
       // Two-terminal parts place labels with the schemdraw rules, so ofst,
       // halign and valign are accepted there. Other elements keep the old limits.
+      // Stand-alone symbols whose labels are placed with Schemdraw's
+      // Element._place_label() against their local bbox.
+      const bboxLabelType = ['Speaker', 'Mic', 'AudioJack', 'Antenna', 'AntennaLoop', 'AntennaLoop2', 'Tag'].includes(type);
       const genericLabel = Object.prototype.hasOwnProperty.call(twoTerminalParts, type)
+        || bboxLabelType
         || ['BjtNpn2', 'BjtPnp2', 'BjtPnp2c2', 'NMos2', 'PMos2', 'NFet2', 'PFet2', 'JFetN2', 'JFetP2',
           'Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE', 'Rshunt', 'SCR', 'Triac',
-          'Battery', 'BatteryCell', 'BatteryDouble', 'SourceI', 'Zener', 'LED', 'Diac'].includes(type);
+          'Battery', 'BatteryCell', 'BatteryDouble', 'SourceI', 'Zener', 'LED', 'Diac',
+          'Fuse', 'FuseIEC', 'FuseIEEE', 'Breaker', 'Motor'].includes(type);
       const transistorType = Boolean(componentDefinitions[type] && componentDefinitions[type].transistor);
       // dsp symbols place labels with Schemdraw's bbox/rotalign rules, so they
       // accept ofst, halign and valign like the two-terminal parts.
@@ -4575,8 +4699,8 @@
       if ('drop' in options && (!(transistor || logicGateTypes.has(type) || DSP_TYPES.has(type)) || typeof options.drop !== 'string')) throw new Error('drop must specify a terminal name.');
       if (('leads' in options && type !== 'Opamp') || ('lead' in options && type !== 'Ground')) throw new Error(`That constructor argument cannot be used with ${type}.`);
       const transistors = ['Bjt', 'JFet', 'Hemt', 'NpnSchottky', 'PnpSchottky', 'BjtNpn', 'BjtPnp', 'BjtPnp2c', 'BjtNpn2', 'BjtPnp2', 'BjtPnp2c2', 'IgbtN', 'IgbtP', 'NpnPhoto', 'PnpPhoto', 'AnalogNFet', 'AnalogPFet', 'AnalogBiasedFet', 'NMos2', 'PMos2', 'NFet2', 'PFet2', 'JFetN2', 'JFetP2', 'JFetN', 'JFetP', 'NFet', 'PFet', 'NMos', 'PMos'];
-      if ('reverse' in options && !['SourceV', 'SourceI', 'Zener', 'Potentiometer', 'Rshunt', 'SCR', 'Triac', 'Ground', 'GroundSignal', 'GroundChassis', 'Vdd', 'Vss', 'NoConnect', 'CurrentMirror', 'VoltageMirror', 'Breaker', 'Inductor2', 'CPE', 'Nullator', 'Norator', 'Memristor2', 'ResistorVar', 'Capacitor2', 'ResistorVarIEC', 'ResistorVarIEEE', 'PotentiometerIEC', 'PotentiometerIEEE', 'FuseIEC', 'FuseIEEE', 'DiodeTunnel', 'DiodeTVS', 'DiodeShockley', 'Josephson', 'Photoresistor', 'PhotoresistorBox', 'PhotoresistorIEC', 'PhotoresistorIEEE', 'Coax', 'Triax', 'Motor', 'BusLine', 'DataBusLine', 'Battery', 'BatteryCell', 'BatteryDouble', ...transistors, ...Object.keys(twoTerminalParts), ...logicGateTypes, 'SwitchRotary', 'SwitchDIP', 'Antenna', 'AntennaLoop', 'AntennaLoop2', 'Speaker', 'Mic', 'AudioJack', "OutletA","OutletB","OutletC","OutletD","OutletE","OutletF","OutletG","OutletH","OutletI","OutletJ","OutletK","OutletL", 'Tag', 'Label', 'Arrowhead', 'DotDotDot'].includes(type)) throw new Error(`${type} does not support reverse.`);
-      if ('flip' in options && !['Zener', 'LED', 'Diac', 'Fuse', 'Battery', 'BatteryCell', 'BatteryDouble', 'SourceI', 'Potentiometer', 'Rshunt', 'SCR', 'Triac', 'Ground', 'GroundSignal', 'GroundChassis', 'Vdd', 'Vss', 'NoConnect', 'CurrentMirror', 'VoltageMirror', 'Breaker', 'Inductor2', 'CPE', 'Nullator', 'Norator', 'Memristor2', 'ResistorVar', 'Capacitor2', 'ResistorVarIEC', 'ResistorVarIEEE', 'PotentiometerIEC', 'PotentiometerIEEE', 'FuseIEC', 'FuseIEEE', 'DiodeTunnel', 'DiodeTVS', 'DiodeShockley', 'Josephson', 'Photoresistor', 'PhotoresistorBox', 'PhotoresistorIEC', 'PhotoresistorIEEE', 'Coax', 'Triax', 'Motor', 'BusLine', 'DataBusLine', ...transistors, ...Object.keys(twoTerminalParts), ...logicGateTypes, 'SwitchRotary', 'SwitchDIP', 'Antenna', 'AntennaLoop', 'AntennaLoop2', 'Speaker', 'Mic', 'AudioJack', "OutletA","OutletB","OutletC","OutletD","OutletE","OutletF","OutletG","OutletH","OutletI","OutletJ","OutletK","OutletL", 'Tag', 'Label', 'Arrowhead', 'DotDotDot'].includes(type)) throw new Error(`${type} does not support flip.`);
+      if ('reverse' in options && !['SourceV', 'SourceI', 'Zener', 'Potentiometer', 'Rshunt', 'SCR', 'Triac', 'Ground', 'GroundSignal', 'GroundChassis', 'Vdd', 'Vss', 'NoConnect', 'CurrentMirror', 'VoltageMirror', 'Breaker', 'Inductor2', 'CPE', 'Nullator', 'Norator', 'Memristor2', 'ResistorVar', 'Capacitor2', 'ResistorVarIEC', 'ResistorVarIEEE', 'PotentiometerIEC', 'PotentiometerIEEE', 'FuseIEC', 'FuseIEEE', 'DiodeTunnel', 'DiodeTVS', 'DiodeShockley', 'Josephson', 'Photoresistor', 'PhotoresistorBox', 'PhotoresistorIEC', 'PhotoresistorIEEE', 'Coax', 'Triax', 'Motor', 'BusLine', 'DataBusLine', 'Battery', 'BatteryCell', 'BatteryDouble', ...transistors, ...Object.keys(twoTerminalParts), ...logicGateTypes, 'SwitchRotary', 'SwitchDIP', 'Antenna', 'AntennaLoop', 'AntennaLoop2', 'Speaker', 'Mic', 'AudioJack', "OutletA","OutletB","OutletC","OutletD","OutletE","OutletF","OutletG","OutletH","OutletI","OutletJ","OutletK","OutletL", 'Tag', 'Label', 'Arrowhead', 'DotDotDot', ...DSP_TYPES].includes(type)) throw new Error(`${type} does not support reverse.`);
+      if ('flip' in options && !['Zener', 'LED', 'Diac', 'Fuse', 'Battery', 'BatteryCell', 'BatteryDouble', 'SourceI', 'Potentiometer', 'Rshunt', 'SCR', 'Triac', 'Ground', 'GroundSignal', 'GroundChassis', 'Vdd', 'Vss', 'NoConnect', 'CurrentMirror', 'VoltageMirror', 'Breaker', 'Inductor2', 'CPE', 'Nullator', 'Norator', 'Memristor2', 'ResistorVar', 'Capacitor2', 'ResistorVarIEC', 'ResistorVarIEEE', 'PotentiometerIEC', 'PotentiometerIEEE', 'FuseIEC', 'FuseIEEE', 'DiodeTunnel', 'DiodeTVS', 'DiodeShockley', 'Josephson', 'Photoresistor', 'PhotoresistorBox', 'PhotoresistorIEC', 'PhotoresistorIEEE', 'Coax', 'Triax', 'Motor', 'BusLine', 'DataBusLine', ...transistors, ...Object.keys(twoTerminalParts), ...logicGateTypes, 'SwitchRotary', 'SwitchDIP', 'Antenna', 'AntennaLoop', 'AntennaLoop2', 'Speaker', 'Mic', 'AudioJack', "OutletA","OutletB","OutletC","OutletD","OutletE","OutletF","OutletG","OutletH","OutletI","OutletJ","OutletK","OutletL", 'Tag', 'Label', 'Arrowhead', 'DotDotDot', ...DSP_TYPES].includes(type)) throw new Error(`${type} does not support flip.`);
       let zoom = 1;
       if ('scale' in options) {
         if (typeof options.scale !== 'string' || !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.scale) || !(Number(options.scale) > 0)) throw new Error('scale must be a finite positive number.');
@@ -5137,37 +5261,78 @@
           }
         } else if (type === 'Tag') {
           const w = num('width', 1.5), h = num('height', 0.625) / 2;
-          // Schemdraw draws the tag from the anchor (0,0) to +w; `left` rotates
-          // it 180 degrees and `reverse` mirrors it about the body centre.
-          const s = tagLeft ? -1 : 1;
-          const rev = 'reverse' in options;
-          const tip = rev ? s * w : 0;
-          const base = rev ? s * (w - h) : s * h;
-          const far = rev ? 0 : s * w;
-          body = `<polygon points="${tip.toFixed(3)},0 ${base.toFixed(3)},${(-h).toFixed(3)} ${far.toFixed(3)},${(-h).toFixed(3)} ${far.toFixed(3)},${h.toFixed(3)} ${base.toFixed(3)},${h.toFixed(3)}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>`;
+          // Schemdraw's Tag: vertex (0,0), two points at x=(w-h), and the far
+          // edge at x=w. `reverse` mirrors about the body centre; `.left()` is
+          // a 180° turn (the same as negating x for this y-symmetric polygon).
+          let pts = [[0, 0], [w - h, h], [w, h], [w, -h], [w - h, -h]];
+          if ('reverse' in options) pts = pts.map(([px, py]) => [w - px, py]);
+          if (tagLeft) pts = pts.map(([px, py]) => [-px, py]);
+          body = `<polygon points="${pts.map(([px, py]) => `${px.toFixed(3)},${(-py).toFixed(3)}`).join(' ')}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>`;
         }
         if (body) elements.push(`<g transform="${tf}">${body}</g>`);
+        if (type === 'Tag') {
+          // Tag labels use Element._place_label with lblloc=center, lblofst=0
+          // and the Tag's private 12px default font size.
+          const w = num('width', 1.5) / 36, h = num('height', 0.625) / 72;
+          const tagBBox = reflectBBox({ xmin: 0, ymin: -h, xmax: w, ymax: h }, options, w / 2);
+          const labelTheta = theta + (tagLeft ? 180 : 0);
+          const lrad = -labelTheta * Math.PI / 180, lcos = Math.cos(lrad), lsin = Math.sin(lrad);
+          const toWorldTag = (px, py) => {
+            const lx = px * 36, ly = -py * 36;
+            return [x + lx * lcos - ly * lsin, y + lx * lsin + ly * lcos];
+          };
+          for (const label of labels) {
+            if (label.items) throw new Error('Tag does not support list labels.');
+            const placement = localLabelPlacement(reflectLabelHints(label, options), tagBBox, labelTheta, 'center', 0);
+            const [lx, ly] = toWorldTag(placement.x, placement.y);
+            const lines = String(label.text).split('\n');
+            // Tag._element_defaults sets fontsize=12, which overrides the
+            // drawing's `config: fontsize` just as Schemdraw's ChainMap does.
+            const size = label.fontsize === undefined ? 12 : label.fontsize;
+            const anchor = { left: 'start', center: 'middle', right: 'end' }[placement.halign];
+            const baseline = placement.valign === 'center' ? 'central' : placement.valign === 'top' ? 'hanging' : 'ideographic';
+            const yAttr = placement.valign === 'center' ? ly - (lines.length + 1) / 2 * size
+              : placement.valign === 'top' ? ly - size
+                : ly - lines.length * size;
+            const spans = lines.map(line => `<tspan x="${lx}" dy="${size}">${labelContent(line)}</tspan>`).join('');
+            const width = Math.max(12, Math.max(...lines.map(line => Array.from(line).length)) * size * 0.75);
+            bounds(lx - (anchor === 'start' ? 0 : anchor === 'end' ? width : width / 2), yAttr,
+              lx + (anchor === 'end' ? 0 : anchor === 'start' ? width : width / 2), yAttr + (lines.length + 1) * size);
+            const transform = placement.rotate ? ` transform="rotate(${-placement.rotate} ${lx} ${ly})"` : '';
+            elements.push(`<text x="${lx}" y="${yAttr}" text-anchor="${anchor}" dominant-baseline="${baseline}"${transform} fill="${label.color || color}" font-family="sans-serif" font-size="${size}">${spans}</text>`);
+          }
+          const tagPts = [[tagBBox.xmin, tagBBox.ymin], [tagBBox.xmax, tagBBox.ymin], [tagBBox.xmin, tagBBox.ymax], [tagBBox.xmax, tagBBox.ymax]].map(([px, py]) => toWorldTag(px, py));
+          bounds(Math.min(...tagPts.map(p => p[0])) - 4, Math.min(...tagPts.map(p => p[1])) - 14,
+            Math.max(...tagPts.map(p => p[0])) + 4, Math.max(...tagPts.map(p => p[1])) + 14);
+          if (name) {
+            const startX = 'reverse' in options ? w : 0;
+            const [ax, ay] = toWorldTag(startX, 0);
+            names[name] = { start: [ax, ay], center: [x, y], end: [x, y], xy: [x, y] };
+          }
+          log(`${type}: at (${x / 36}, ${-y / 36})`);
+          if ('hold' in options) [x, y, direction] = previousState;
+          continue;
+        }
         for (const label of labels) {
           if (label.items || label.halign != null || label.ofst != null) throw new Error(`${type} does not support label arguments.`);
           const loc = label.loc || 'center';
-          const size = label.fontsize === undefined ? (type === 'Tag' && !labelSizeSet ? 12 : labelSize) : label.fontsize;
+          const size = label.fontsize === undefined ? labelSize : label.fontsize;
           let lx = x, ly = y;
           if (loc === 'center') {
-            // The body centre is the same whether or not it is mirrored.
-            lx = x + (type === 'Tag' ? (tagLeft ? -1 : 1) * num('width', 1.5) / 2 : 0);
+            // Body centre from the shape just drawn (Arrowhead/DotDotDot).
+            lx = x;
           }
-          else if (loc === 'top') ly = y - (type === 'Tag' ? 18 : 10);
-          else if (loc === 'bot' || loc === 'bottom') ly = y + (type === 'Tag' ? 18 : 10);
-          else if (loc === 'left') lx = x - (type === 'Tag' ? 8 : 6);
-          else if (loc === 'right') lx = x + (type === 'Tag' ? num('width', 1.5) + 8 : 6);
+          else if (loc === 'top') ly = y - 10;
+          else if (loc === 'bot' || loc === 'bottom') ly = y + 10;
+          else if (loc === 'left') lx = x - 6;
+          else if (loc === 'right') lx = x + 6;
           else throw new Error(`Unsupported ${type} label loc: ${loc}`);
           const anchor = loc === 'left' ? 'end' : loc === 'right' ? 'start' : 'middle';
           const width = Math.max(size, Array.from(label.text).length * size * 0.75);
           bounds(lx - width, ly - size, lx + width, ly + size);
           elements.push(`<text x="${lx}" y="${ly}" text-anchor="${anchor}" dominant-baseline="central" fill="${label.color || color}" font-family="sans-serif" font-size="${size}">${labelContent(label.text)}</text>`);
         }
-        if (type === 'Tag') bounds(x - 4, y - 14, x + num('width', 1.5) + 4, y + 14);
-        else if (type === 'Arrowhead') bounds(x - 12, y - 6, x + 4, y + 6);
+        if (type === 'Arrowhead') bounds(x - 12, y - 6, x + 4, y + 6);
         else if (type === 'DotDotDot') bounds(x + 12, y - 6, x + 60, y + 6);
         if (name) names[name] = { start: [x, y], center: [x, y], end: [x, y], xy: [x, y] };
         // DotDotDot's drop is (2, 0); the other annotation elements keep place.
@@ -5311,35 +5476,61 @@
           glyph += arrowStem(hx0, ringy + swdy, ringy);
           jackAnchors.ringswitch = [0, ringy + swdy];
         }
+        // Local bbox from Schemdraw's get_bbox() (drawing units, y up). The
+        // contact dots and the switch arrow widen it.
+        const glyphBox = {
+          xmin: -len - (ring ? swidth : 0),
+          ymin: -(ring ? sleevey : 0) - (dots ? r : 0),
+          xmax: dots ? r : -r,
+          ymax: tipy + (sw ? 0.15 : (dots ? r : 0))
+        };
         const sx = 'reverse' in options ? -1 : 1, sy2 = 'flip' in options ? -1 : 1;
-        const tf = `translate(${x} ${y})` + (theta ? ` rotate(${-theta})` : '') + ((sx !== 1 || sy2 !== 1) ? ` scale(${sx} ${sy2})` : '');
+        const glyphCenter = (glyphBox.xmin + glyphBox.xmax) / 2;
+        const refl = (sx !== 1 || sy2 !== 1)
+          ? ` translate(${sx === -1 ? 2 * glyphCenter * P : 0} 0) scale(${sx} ${sy2})` : '';
+        const tf = `translate(${x} ${y})` + (theta ? ` rotate(${-theta})` : '') + refl;
         elements.push(`<g transform="${tf}">${glyph}</g>`);
+        const rad = -theta * Math.PI / 180, cos = Math.cos(rad), sin = Math.sin(rad);
+        const toWorldFrame = (px, py) => {
+          const lx = px * P, ly = -py * P;
+          return [x + lx * cos - ly * sin, y + lx * sin + ly * cos];
+        };
+        const toWorld = (px, py) => toWorldFrame(
+          sx === -1 ? 2 * glyphCenter - px : px,
+          sy2 === -1 ? -py : py
+        );
         // The white contact dots must sit above leads drawn afterwards.
         if (dots && fill === 'white') {
-          const toWorld = localToWorld(x, y, sx, sy2, theta);
           for (const key of Object.keys(jackAnchors)) {
-            const [wx, wy] = toWorld(jackAnchors[key][0] * P, -jackAnchors[key][1] * P);
+            const [wx, wy] = toWorld(jackAnchors[key][0], jackAnchors[key][1]);
             whiteMarker(wx, wy, r * P, color);
           }
         }
+        const labelBox = reflectBBox(glyphBox, options, glyphCenter);
         for (const label of labels) {
-          if (label.items || label.halign != null || label.ofst != null || label.rotate !== undefined) throw new Error('AudioJack does not support label arguments.');
-          const loc = label.loc || 'top';
-          let lx = x - 36, ly = y;
-          if (loc === 'top') { ly = y - 56; }
-          else if (loc === 'bot' || loc === 'bottom') { ly = y + 52; }
-          else if (loc === 'left') { lx = x - 90; }
-          else if (loc === 'right') { lx = x + 20; }
-          else throw new Error(`Unsupported AudioJack label loc: ${loc}`);
-          const anchor = loc === 'left' ? 'end' : loc === 'right' ? 'start' : 'middle';
-          const width = Math.max(12, Array.from(label.text).length * 10);
-          bounds(lx - width, ly - 18, lx + width, ly + 8);
-          elements.push(`<text x="${lx}" y="${ly}" text-anchor="${anchor}"${textFill} font-family="sans-serif" font-size="${labelSize}">${labelContent(label.text)}</text>`);
+          if (label.items) throw new Error('AudioJack does not support list labels.');
+          const placement = localLabelPlacement(reflectLabelHints(label, options), labelBox, theta, 'top', 0.1);
+          const [lx, ly] = toWorldFrame(placement.x, placement.y);
+          const lines = String(label.text).split('\n');
+          const size = label.fontsize === undefined ? labelSize : label.fontsize;
+          const anchor = { left: 'start', center: 'middle', right: 'end' }[placement.halign];
+          const baseline = placement.valign === 'center' ? 'central' : placement.valign === 'top' ? 'hanging' : 'ideographic';
+          const yAttr = placement.valign === 'center' ? ly - (lines.length + 1) / 2 * size
+            : placement.valign === 'top' ? ly - size
+              : ly - lines.length * size;
+          const spans = lines.map(line => `<tspan x="${lx}" dy="${size}">${labelContent(line)}</tspan>`).join('');
+          const width = Math.max(12, Math.max(...lines.map(line => Array.from(line).length)) * size * 0.71);
+          bounds(lx - (anchor === 'start' ? 0 : anchor === 'end' ? width : width / 2), yAttr - size,
+            lx + (anchor === 'end' ? 0 : anchor === 'start' ? width : width / 2), yAttr + (lines.length + 1) * size);
+          const transform = placement.rotate ? ` transform="rotate(${-placement.rotate} ${lx} ${ly})"` : '';
+          elements.push(`<text x="${lx}" y="${yAttr}" text-anchor="${anchor}" dominant-baseline="${baseline}"${transform}${label.color ? ` fill="${label.color}"` : textFill} font-family="sans-serif" font-size="${size}">${spans}</text>`);
         }
-        bounds(x - 84, y - (ring && ringSwitch ? 96 : 60), x + 18, y + 18);
+        const [jx1, jy1] = toWorldFrame(labelBox.xmin, labelBox.ymin);
+        const [jx2, jy2] = toWorldFrame(labelBox.xmax, labelBox.ymax);
+        bounds(Math.min(jx1, jx2), Math.min(jy1, jy2), Math.max(jx1, jx2), Math.max(jy1, jy2));
         if (name) {
           const out = Object.create(null);
-          for (const key of Object.keys(jackAnchors)) out[key] = [x + jackAnchors[key][0] * P, y - jackAnchors[key][1] * P];
+          for (const key of Object.keys(jackAnchors)) out[key] = toWorld(jackAnchors[key][0], jackAnchors[key][1]);
           out.start = [x, y]; out.center = [x, y]; out.end = [x, y]; out.xy = [x, y];
           names[name] = out;
         }
@@ -5373,24 +5564,52 @@
             `<path d="M ${-rh * 2},${-rh} L ${-rh * 2},${rh * 3}" ${stroke}/>` +
             `<path d="M ${-rh * 2},${-rh} a ${rh * 2} ${rh * 2} 0 1 1 0 ${rh * 4}" ${stroke}/>`;
         }
-        const tf = `translate(${x} ${y})` + (theta ? ` rotate(${-theta})` : '') + ((sx !== 1 || sy2 !== 1) ? ` scale(${sx} ${sy2})` : '');
+        // Local bbox from Schemdraw's get_bbox() (drawing units, y up).
+        const glyphBox = type === 'Speaker'
+          ? { xmin: 0, ymin: -1.125, xmax: 0.875, ymax: 0.625 }
+          : { xmin: -0.5, ymin: -0.75, xmax: 0.25, ymax: 0.25 };
+        const glyphCenter = (glyphBox.xmin + glyphBox.xmax) / 2;
+        // Reverse mirrors about the bbox centre; flip mirrors about y = 0.
+        const refl = (sx !== 1 || sy2 !== 1)
+          ? ` translate(${sx === -1 ? 2 * glyphCenter * P : 0} 0) scale(${sx} ${sy2})` : '';
+        const tf = `translate(${x} ${y})` + (theta ? ` rotate(${-theta})` : '') + refl;
         elements.push(`<g transform="${tf}">${glyph}</g>`);
+        const rad = -theta * Math.PI / 180, cos = Math.cos(rad), sin = Math.sin(rad);
+        const toWorld = (px, py) => {
+          const lx = px * P, ly = -py * P;
+          return [x + lx * cos - ly * sin, y + lx * sin + ly * cos];
+        };
+        const labelBox = reflectBBox(glyphBox, options, glyphCenter);
         for (const label of labels) {
-          if (label.items || label.halign != null || label.ofst != null || label.rotate !== undefined) throw new Error(`${type} does not support label arguments.`);
-          const loc = label.loc || 'top';
-          let lx = x, ly = y;
-          if (loc === 'top') ly = y - 30;
-          else if (loc === 'bot' || loc === 'bottom') ly = y + 30;
-          else if (loc === 'left') lx = x - 30;
-          else if (loc === 'right') lx = x + 40;
-          else throw new Error(`Unsupported ${type} label loc: ${loc}`);
-          const anchor = loc === 'left' ? 'end' : loc === 'right' ? 'start' : 'middle';
-          const width = Math.max(12, Array.from(label.text).length * 10);
-          bounds(lx - width, ly - 18, lx + width, ly + 8);
-          elements.push(`<text x="${lx}" y="${ly}" text-anchor="${anchor}"${textFill} font-family="sans-serif" font-size="${labelSize}">${labelContent(label.text)}</text>`);
+          if (label.items) throw new Error(`${type} does not support list labels.`);
+          const placement = localLabelPlacement(reflectLabelHints(label, options), labelBox, theta, 'top', 0.1);
+          const [lx, ly] = toWorld(placement.x, placement.y);
+          const lines = String(label.text).split('\n');
+          const size = label.fontsize === undefined ? labelSize : label.fontsize;
+          const anchor = { left: 'start', center: 'middle', right: 'end' }[placement.halign];
+          const baseline = placement.valign === 'center' ? 'central' : placement.valign === 'top' ? 'hanging' : 'ideographic';
+          const yAttr = placement.valign === 'center' ? ly - (lines.length + 1) / 2 * size
+            : placement.valign === 'top' ? ly - size
+              : ly - lines.length * size;
+          const spans = lines.map(line => `<tspan x="${lx}" dy="${size}">${labelContent(line)}</tspan>`).join('');
+          const width = Math.max(12, Math.max(...lines.map(line => Array.from(line).length)) * size * 0.71);
+          bounds(lx - (anchor === 'start' ? 0 : anchor === 'end' ? width : width / 2), yAttr - size,
+            lx + (anchor === 'end' ? 0 : anchor === 'start' ? width : width / 2), yAttr + (lines.length + 1) * size);
+          const transform = placement.rotate ? ` transform="rotate(${-placement.rotate} ${lx} ${ly})"` : '';
+          elements.push(`<text x="${lx}" y="${yAttr}" text-anchor="${anchor}" dominant-baseline="${baseline}"${transform}${label.color ? ` fill="${label.color}"` : textFill} font-family="sans-serif" font-size="${size}">${spans}</text>`);
         }
-        bounds(x - 24, y - 28, x + 36, y + 44);
-        if (name) names[name] = { in1: [x, y], in2: [x, y + 18], start: [x, y], center: [x, y], end: [x, y], xy: [x, y] };
+        const [bx1, by1] = toWorld(labelBox.xmin, labelBox.ymin);
+        const [bx2, by2] = toWorld(labelBox.xmax, labelBox.ymax);
+        bounds(Math.min(bx1, bx2), Math.min(by1, by2), Math.max(bx1, bx2), Math.max(by1, by2));
+        if (name) {
+          const anchorPoint = (px, py) => toWorld(
+            sx === -1 ? 2 * glyphCenter - px : px,
+            sy2 === -1 ? -py : py
+          );
+          const [in1x, in1y] = anchorPoint(type === 'Speaker' ? 0 : 0.25, 0);
+          const [in2x, in2y] = anchorPoint(type === 'Speaker' ? 0 : 0.25, -0.5);
+          names[name] = { in1: [in1x, in1y], in2: [in2x, in2y], start: [x, y], center: [x, y], end: [x, y], xy: [x, y] };
+        }
         log(`${type}: at (${x / 36}, ${-y / 36})`);
         if ('hold' in options) [x, y, direction] = previousState;
         continue;
@@ -5409,25 +5628,53 @@
           if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta must be a finite number.');
           theta = Number(options.theta);
         }
+        // Local bbox from Schemdraw's get_bbox() (drawing units, y up).
+        const glyphBox = {
+          Antenna: { xmin: -0.38, ymin: 0, xmax: 0.38, ymax: 1.2 },
+          AntennaLoop: { xmin: -0.5, ymin: 0, xmax: 0.7, ymax: 1.3 },
+          AntennaLoop2: { xmin: -0.625, ymin: 0, xmax: 0.875, ymax: 1.75 }
+        }[type];
         const sx = 'reverse' in options ? -1 : 1, sy2 = 'flip' in options ? -1 : 1;
-        const tf = `translate(${x} ${y})` + (theta ? ` rotate(${-theta})` : '') + ((sx !== 1 || sy2 !== 1) ? ` scale(${sx} ${sy2})` : '');
+        const glyphCenter = (glyphBox.xmin + glyphBox.xmax) / 2;
+        const refl = (sx !== 1 || sy2 !== 1)
+          ? ` translate(${sx === -1 ? 2 * glyphCenter * 36 : 0} 0) scale(${sx} ${sy2})` : '';
+        const tf = `translate(${x} ${y})` + (theta ? ` rotate(${-theta})` : '') + refl;
         elements.push(`<g transform="${tf}"><path d="${glyph}" ${stroke}/></g>`);
+        const rad = -theta * Math.PI / 180, cos = Math.cos(rad), sin = Math.sin(rad);
+        const toWorld = (px, py) => {
+          const lx = px * 36, ly = -py * 36;
+          return [x + lx * cos - ly * sin, y + lx * sin + ly * cos];
+        };
+        const labelBox = reflectBBox(glyphBox, options, glyphCenter);
         for (const label of labels) {
-          if (label.items || label.halign != null || label.ofst != null || label.rotate !== undefined) throw new Error(`${type} does not support label arguments.`);
-          const loc = label.loc || 'top';
-          let lx = x, ly = y;
-          if (loc === 'top') { ly = y - 52; }
-          else if (loc === 'bot' || loc === 'bottom') { ly = y + 20; }
-          else if (loc === 'left') { lx = x - 26; }
-          else if (loc === 'right') { lx = x + 26; }
-          else throw new Error(`Unsupported ${type} label loc: ${loc}`);
-          const anchor = loc === 'left' ? 'end' : loc === 'right' ? 'start' : 'middle';
-          const width = Math.max(12, Array.from(label.text).length * 10);
-          bounds(lx - width, ly - 18, lx + width, ly + 8);
-          elements.push(`<text x="${lx}" y="${ly}" text-anchor="${anchor}"${textFill} font-family="sans-serif" font-size="${labelSize}">${labelContent(label.text)}</text>`);
+          if (label.items) throw new Error(`${type} does not support list labels.`);
+          const placement = localLabelPlacement(reflectLabelHints(label, options), labelBox, theta, 'top', 0.1);
+          const [lx, ly] = toWorld(placement.x, placement.y);
+          const lines = String(label.text).split('\n');
+          const size = label.fontsize === undefined ? labelSize : label.fontsize;
+          const anchor = { left: 'start', center: 'middle', right: 'end' }[placement.halign];
+          const baseline = placement.valign === 'center' ? 'central' : placement.valign === 'top' ? 'hanging' : 'ideographic';
+          const yAttr = placement.valign === 'center' ? ly - (lines.length + 1) / 2 * size
+            : placement.valign === 'top' ? ly - size
+              : ly - lines.length * size;
+          const spans = lines.map(line => `<tspan x="${lx}" dy="${size}">${labelContent(line)}</tspan>`).join('');
+          const width = Math.max(12, Math.max(...lines.map(line => Array.from(line).length)) * size * 0.71);
+          bounds(lx - (anchor === 'start' ? 0 : anchor === 'end' ? width : width / 2), yAttr - size,
+            lx + (anchor === 'end' ? 0 : anchor === 'start' ? width : width / 2), yAttr + (lines.length + 1) * size);
+          const transform = placement.rotate ? ` transform="rotate(${-placement.rotate} ${lx} ${ly})"` : '';
+          elements.push(`<text x="${lx}" y="${yAttr}" text-anchor="${anchor}" dominant-baseline="${baseline}"${transform}${label.color ? ` fill="${label.color}"` : textFill} font-family="sans-serif" font-size="${size}">${spans}</text>`);
         }
-        bounds(x - (type === 'AntennaLoop2' ? 32 : 26), y - (type === 'AntennaLoop2' ? 66 : 48), x + (type === 'AntennaLoop2' ? 32 : 26), y + 4);
-        if (name) names[name] = { start: [x, y], center: [x, y], end: [x, y], xy: [x, y] };
+        const [ax1, ay1] = toWorld(labelBox.xmin, labelBox.ymin);
+        const [ax2, ay2] = toWorld(labelBox.xmax, labelBox.ymax);
+        bounds(Math.min(ax1, ax2), Math.min(ay1, ay2), Math.max(ax1, ax2), Math.max(ay1, ay2));
+        if (name) {
+          // Schemdraw's AntennaLoop / AntennaLoop2 end anchor is offset by the lead.
+          const endX = type === 'Antenna' ? 0 : type === 'AntennaLoop' ? 0.2 : 0.25;
+          const anchorPoint = (px, py) => toWorld(sx === -1 ? 2 * glyphCenter - px : px, sy2 === -1 ? -py : py);
+          const [ex, ey] = anchorPoint(endX, 0);
+          const [stx, sty] = anchorPoint(0, 0);
+          names[name] = { start: [stx, sty], center: [x, y], end: [ex, ey], xy: [x, y] };
+        }
         log(`${type}: at (${x / 36}, ${-y / 36})`);
         if ('hold' in options) [x, y, direction] = previousState;
         continue;
@@ -5484,12 +5731,16 @@
           items.forEach((text, i) => {
             const frac = label.items ? (i + 1) / (label.items.length + 1) : 0.5;
             let lx0 = xextF[0] + (xextF[1] - xextF[0]) * frac;
-            // Schemdraw resolves offsets per side: top labels use the positive
-            // magnitude (default 0.1), bottom labels invert an explicit offset.
+            // (x y) replaces the default lblofst (0.1 unit) on the axis it sets;
+            // one value replaces it across the label's side (_place_label).
+            const ofstX = Array.isArray(label.ofst) ? label.ofst[0] : null;
             const ofstY = Array.isArray(label.ofst) ? label.ofst[1] : (typeof label.ofst === 'number' ? label.ofst : null);
-            const off = loc === 'top' ? (ofstY == null ? 0.1 : ofstY) : (ofstY == null ? 0.1 : -ofstY);
-            let ly0 = loc === 'top' ? extF[0] - off * 36 : extF[1] + off * 36;
-            if (Array.isArray(label.ofst)) lx0 += label.ofst[0] * 36;
+            const along = ofstX == null ? 0 : ofstX * 36;
+            const across = (ofstY == null ? 0.1 : (loc === 'top' ? ofstY : -ofstY)) * 36;
+            const isSide = loc === 'left' || loc === 'right';
+            if (isSide) lx0 += loc === 'right' ? across : -across;
+            const ly0 = loc === 'top' ? extF[0] - across : extF[1] + across;
+            if (!isSide) lx0 += along;
             // Rotate the label position with theta (extents are already mirrored).
             const lx = x + lx0 * cosT + ly0 * sinT;
             const ly = y - lx0 * sinT + ly0 * cosT;
@@ -5609,6 +5860,21 @@
         if (length !== null) throw new Error(`${type} does not take a length.`);
         const spec = buildDsp(type, options, labelSize, color);
         if ('at' in options) [x, y] = atPoint(options.at);
+        // Element._flipreverse(): Schemdraw mirrors the local segments and
+        // anchors before placing the element. `reverse` uses the `center`
+        // anchor if the element defines one, otherwise the bbox centre.
+        const reverseElement = 'reverse' in options;
+        const flipElement = 'flip' in options;
+        const reflectCenter = spec.anchors.center
+          ? spec.anchors.center[0]
+          : (spec.bbox.xmin + spec.bbox.xmax) / 2;
+        const reflectPoint = ([px, py]) => [
+          reverseElement ? 2 * reflectCenter - px : px,
+          flipElement ? -py : py
+        ];
+        const reflectedAnchors = Object.create(null);
+        for (const [key, value] of Object.entries(spec.anchors)) reflectedAnchors[key] = reflectPoint(value);
+        const reflectedBBox = reflectBBox(spec.bbox, options, reflectCenter);
         const drawingTheta = typeof direction === 'number' ? direction
           : ({ right: 0, up: 90, left: 180, down: 270 })[direction];
         let theta;
@@ -5643,17 +5909,23 @@
           if (!Object.prototype.hasOwnProperty.call(spec.anchors, options.drop)) throw new Error(`Unknown ${type} drop: ${options.drop}`);
           dropPoint = spec.anchors[options.drop];
         }
-        const shift = anchorName === null ? [0, 0] : spec.anchors[anchorName];
+        const shift = anchorName === null ? [0, 0] : reflectPoint(spec.anchors[anchorName]);
         const originX = x, originY = y;
         const rad = -theta * Math.PI / 180, cos = Math.cos(rad), sin = Math.sin(rad);
-        // Local drawing units (y up) → world SVG pixels.
-        const tf = ([px, py]) => {
+        // Local drawing units (y up) → world SVG pixels. `tf` takes a point in
+        // the element's original (pre-flip/reverse) frame, while `tfFrame`
+        // takes one already expressed in the reflected frame (labels are
+        // positioned against the reflected bbox but not reflected again).
+        const tfFrame = ([px, py]) => {
           const qx = (px - shift[0]) * 36, qy = -(py - shift[1]) * 36;
           return [originX + qx * cos - qy * sin, originY + qx * sin + qy * cos];
         };
+        const tf = point => tfFrame(reflectPoint(point));
         const transform = `translate(${originX} ${originY})`
           + (theta ? ` rotate(${-theta})` : '')
-          + (shift[0] || shift[1] ? ` translate(${-shift[0] * 36} ${shift[1] * 36})` : '');
+          + (shift[0] || shift[1] ? ` translate(${-shift[0] * 36} ${shift[1] * 36})` : '')
+          + (reverseElement ? ` translate(${2 * reflectCenter * 36} 0) scale(-1 1)` : '')
+          + (flipElement ? ' scale(1 -1)' : '');
         elements.push(`<g transform="${transform}">${spec.body}</g>`);
         // Glyph texts (Σ, mixer ports) are segments in Schemdraw: their
         // position follows the element, but the text itself stays upright.
@@ -5661,12 +5933,13 @@
           const [gx, gy] = tf([glyph.x / 36, -glyph.y / 36]);
           elements.push(`<text x="${gx}" y="${gy - glyph.size}" text-anchor="middle" dominant-baseline="central"${textFill} font-family="sans-serif" font-size="${glyph.size}"><tspan x="${gx}" dy="${glyph.size}">${labelContent(glyph.value)}</tspan></text>`);
         }
+        const reflectedSpec = Object.assign({}, spec, { bbox: reflectedBBox, anchors: reflectedAnchors });
         for (const label of labels) {
           if (label.items) throw new Error(`${type} does not support list labels.`);
           if (label.rotate !== undefined) throw new Error(`${type} does not support label rotation.`);
           const size = label.fontsize === undefined ? labelSize : label.fontsize;
-          const placement = dspLabelPosition(label, spec, theta);
-          const [lx, ly] = tf([placement.x / 36, -placement.y / 36]);
+          const placement = dspLabelPosition(reflectLabelHints(label, options), reflectedSpec, theta);
+          const [lx, ly] = tfFrame([placement.x / 36, -placement.y / 36]);
           const lines = String(label.text).split('\n');
           const yAttr = placement.valign === 'center' ? ly - (lines.length + 1) / 2 * size
             : placement.valign === 'top' ? ly - size
@@ -5687,7 +5960,9 @@
         }
         const placedAnchors = Object.create(null);
         for (const [key, value] of Object.entries(spec.anchors)) placedAnchors[key] = tf(value);
-        placedAnchors.xy = tf([0, 0]);
+        // Schemdraw records `xy` from Transform(0,0), i.e. the unreflected
+        // local origin after the anchor shift.
+        placedAnchors.xy = tfFrame([0, 0]);
         if (name) {
           names[name] = placedAnchors;
           namedTypes[name] = type;
@@ -5744,19 +6019,63 @@
           const [bx, by] = world([lx, ly]);
           bounds(bx - 2, by - 2, bx + 2, by + 2);
         }
+        // SwitchSpdt2's LabelHints from switches.py. They are applied to an
+        // explicit loc=a/b/c before Element._place_label runs.
+        const spdt2Hints = {
+          a: { ofst: [0, -0.18], halign: 'center', valign: 'top' },
+          b: { ofst: [0, 0.18], halign: 'center', valign: 'bottom' },
+          c: { ofst: [0, -0.18], halign: 'center', valign: 'top' }
+        };
+        // Element._place_label places labels against the local bbox and the
+        // element's drawing angle. SwitchSpdt2 is an Element, not an
+        // Element2Term, so its labels use the generic bbox/rotalign path.
+        const baseBox = contacts
+          ? { xmin: 0, ymin: -0.52, xmax: 1, ymax: 0.52 }
+          : { xmin: 0, ymin: options.action ? -0.0438 : 0, xmax: 1, ymax: 0.4 };
+        const localBox = reflectBBox(baseBox, options, 0.5);
+        const anchorUnits = {
+          a: [(contacts ? 4.32 : 0) / 36, 0],
+          b: [bLocal / 36, 0.4],
+          c: [bLocal / 36, -0.4]
+        };
+        for (const key of Object.keys(anchorUnits)) {
+          const [ax0, ay0] = anchorUnits[key];
+          anchorUnits[key] = [
+            sx === -1 ? 1 - ax0 : ax0,
+            sy === -1 ? -ay0 : ay0
+          ];
+        }
+        const thetaDegrees = typeof direction === 'number' ? direction
+          : ({ right: 0, up: 90, left: 180, down: 270 })[direction];
+        const toWorldFrame = ([lx, ly]) => [
+          x + lx * dx - ly * dy,
+          y + lx * dy + ly * dx
+        ];
         for (const label of labels) {
-          if (label.items || label.halign != null || label.ofst != null || label.rotate !== undefined) throw new Error('SwitchSpdt2 does not support list labels or label offsets.');
-          const loc = label.loc || 'top';
-          let localX, localY, anchor, baseline;
-          if (loc === 'top') { localX = 18; localY = -24; anchor = 'middle'; baseline = 'ideographic'; }
-          else if (loc === 'bot' || loc === 'bottom') { localX = 18; localY = 28; anchor = 'middle'; baseline = 'hanging'; }
-          else if (loc === 'left') { localX = -8; localY = 0; anchor = 'end'; baseline = 'central'; }
-          else if (loc === 'right') { localX = 44; localY = 0; anchor = 'start'; baseline = 'central'; }
-          else throw new Error(`Unsupported SwitchSpdt2 label loc: ${loc}`);
-          const [tx, ty] = world([localX, localY]);
-          elements.push(`<text x="${tx}" y="${ty}" text-anchor="${anchor}" dominant-baseline="${baseline}"${textFill} font-family="sans-serif" font-size="${labelSize}">${labelContent(label.text)}</text>`);
-          const width = Math.max(12, Array.from(label.text).length * 10);
-          bounds(tx - width, ty - 18, tx + width, ty + 8);
+          if (label.items) throw new Error('SwitchSpdt2 does not support list labels.');
+          let hinted = Object.assign({}, label);
+          const hint = label.loc && spdt2Hints[label.loc];
+          if (hint) {
+            if (hinted.ofst == null) hinted.ofst = hint.ofst.slice();
+            if (!hinted.halign) hinted.halign = hint.halign;
+            if (!hinted.valign) hinted.valign = hint.valign;
+          }
+          hinted = reflectLabelHints(hinted, options);
+          const placement = localLabelPlacement(hinted, localBox, thetaDegrees, 'top', 0.1, anchorUnits);
+          const [tx, ty] = toWorldFrame([placement.x * 36, -placement.y * 36]);
+          const size = hinted.fontsize === undefined ? labelSize : hinted.fontsize;
+          const anchor = { left: 'start', center: 'middle', right: 'end' }[placement.halign];
+          const baseline = placement.valign === 'center' ? 'central' : placement.valign === 'top' ? 'hanging' : 'ideographic';
+          const lines = String(label.text).split('\n');
+          const yAttr = placement.valign === 'center' ? ty - (lines.length + 1) / 2 * size
+            : placement.valign === 'top' ? ty - size
+              : ty - lines.length * size;
+          const spans = lines.map(line => `<tspan x="${tx}" dy="${size}">${labelContent(line)}</tspan>`).join('');
+          const width = Math.max(12, Math.max(...lines.map(line => Array.from(line).length)) * size * 0.71);
+          bounds(tx - (anchor === 'start' ? 0 : anchor === 'end' ? width : width / 2), yAttr - size,
+            tx + (anchor === 'end' ? 0 : anchor === 'start' ? width : width / 2), yAttr + (lines.length + 1) * size);
+          const transform = placement.rotate ? ` transform="rotate(${-placement.rotate} ${tx} ${ty})"` : '';
+          elements.push(`<text x="${tx}" y="${yAttr}" text-anchor="${anchor}" dominant-baseline="${baseline}"${transform}${hinted.color ? ` fill="${hinted.color}"` : textFill} font-family="sans-serif" font-size="${size}">${spans}</text>`);
         }
         if (contacts) for (const key of ['a', 'b', 'c']) whiteMarker(anchors[key][0], anchors[key][1], 4.32, color);
         if (name) {
@@ -6538,13 +6857,16 @@
           const bx1 = ('idot' in options ? -dotR : 0);
           const bx2 = length + ('dot' in options ? dotR : 0);
           const thetaDeg = arbitraryAngle ? direction : ({ right: 0, up: 90, left: 180, down: 270 })[direction];
-          let listLoc = label.loc || (type === 'Gap' ? 'center' : 'top');
+          // Element._place_label() mirrors explicit alignment and an (x y)
+          // offset when the element is flipped or reversed.
+          const hinted = reflectLabelHints(label, options);
+          let listLoc = hinted.loc || (type === 'Gap' ? 'center' : 'top');
           if (listLoc === 'bot') listLoc = 'bottom';
           if (thetaDeg > 90 && thetaDeg <= 270) {
             listLoc = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' }[listLoc] || listLoc;
           }
           let ox = 0, oy = 0;
-          const ofst = label.ofst == null ? (type === 'Gap' ? 0 : 0.1) : label.ofst;
+          const ofst = hinted.ofst == null ? (type === 'Gap' ? 0 : 0.1) : hinted.ofst;
           if (Array.isArray(ofst)) { ox = ofst[0] * 36; oy = ofst[1] * 36; }
           else {
             const o = ofst * 36;
@@ -6560,8 +6882,8 @@
             ['center', 'bottom'], ['right', 'bottom'], ['right', 'center'], ['right', 'top'],
             ['center', 'top'], ['left', 'top'], ['left', 'center'], ['left', 'bottom']
           ][Math.round(th / 45) % 8];
-          const halign = label.halign || rotalign[0];
-          const valign = label.valign || rotalign[1];
+          const halign = hinted.halign || rotalign[0];
+          const valign = hinted.valign || rotalign[1];
           const anchor = { left: 'start', center: 'middle', right: 'end' }[halign];
           const baseline = valign === 'center' ? 'central' : valign === 'top' ? 'hanging' : 'ideographic';
           const size = label.fontsize === undefined ? labelSize : label.fontsize;
@@ -6643,7 +6965,9 @@
           elements.push(`<text x="${lx}" y="${ly - labelSize}" text-anchor="start" dominant-baseline="central"${textFill} font-family="sans-serif" font-size="${labelSize}"><tspan x="${lx}" dy="${labelSize}">${labelContent(label.text)}</tspan></text>`);
           continue;
         }
-        if ((Object.prototype.hasOwnProperty.call(twoTerminalParts, type) || ['Gap', 'Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE', 'Rshunt', 'SCR', 'Triac'].includes(type)) && !label.items && label.rotate === undefined) {
+        if ((Object.prototype.hasOwnProperty.call(twoTerminalParts, type) || ['Gap', 'Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE', 'Rshunt', 'SCR', 'Triac',
+          'Zener', 'LED', 'Diac', 'Fuse', 'FuseIEC', 'FuseIEEE', 'Battery', 'BatteryCell', 'BatteryDouble', 'SourceI', 'Breaker', 'Motor',
+          'BjtNpn2', 'BjtPnp2', 'BjtPnp2c2', 'NMos2', 'PMos2', 'NFet2', 'PFet2', 'JFetN2', 'JFetP2'].includes(type)) && !label.items && label.rotate === undefined) {
           // Schemdraw's Element.label/_place_label for a single label:
           // the anchor is a point on the element's local bbox, `ofst` is added
           // in local coordinates, and the text alignment comes from the
@@ -6659,7 +6983,12 @@
           const bx1 = ('idot' in options ? -dotR : 0);
           const bx2 = length + ('dot' in options ? dotR : 0);
           const thetaDeg = arbitraryAngle ? direction : ({ right: 0, up: 90, left: 180, down: 270 })[direction];
-          let labelLoc = label.loc || (['Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE', 'LED', 'LED2', 'Photodiode'].includes(type) ? 'bottom' : type === 'Gap' ? 'center' : 'top');
+          // Element._place_label() mirrors explicit alignment and an (x y)
+          // offset when the element is flipped or reversed.
+          const hinted = reflectLabelHints(label, options);
+          const bottomDefault = ['Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE', 'LED', 'LED2', 'Photodiode',
+            'BjtNpn2', 'BjtPnp2', 'BjtPnp2c2', 'NMos2', 'PMos2', 'NFet2', 'PFet2', 'JFetN2', 'JFetP2'].includes(type);
+          let labelLoc = hinted.loc || (bottomDefault ? 'bottom' : type === 'Gap' ? 'center' : 'top');
           if (labelLoc === 'bot') labelLoc = 'bottom';
           if (thetaDeg > 90 && thetaDeg <= 270) {
             labelLoc = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' }[labelLoc] || labelLoc;
@@ -6672,7 +7001,7 @@
           else if (labelLoc === 'center') { ax = (bx1 + bx2) / 2; ay = (above - below) / 2; }
           else throw new Error(`Unsupported ${type} label loc: ${labelLoc}`);
           let ox = 0, oy = 0;
-          const ofst = label.ofst == null ? (type === 'Gap' ? 0 : 0.1) : label.ofst;
+          const ofst = hinted.ofst == null ? (type === 'Gap' ? 0 : 0.1) : hinted.ofst;
           if (Array.isArray(ofst)) { ox = ofst[0] * 36; oy = ofst[1] * 36; }
           else {
             const o = ofst * 36;
@@ -6690,8 +7019,8 @@
             ['center', 'bottom'], ['right', 'bottom'], ['right', 'center'], ['right', 'top'],
             ['center', 'top'], ['left', 'top'], ['left', 'center'], ['left', 'bottom']
           ][Math.round(th / 45) % 8];
-          const halign = label.halign || rotalign[0];
-          const valign = label.valign || rotalign[1];
+          const halign = hinted.halign || rotalign[0];
+          const valign = hinted.valign || rotalign[1];
           const localX = ax + ox, localY = -(ay + oy);
           const wx = x + dx * localX - dy * localY;
           const wy = y + dy * localX + dx * localY;

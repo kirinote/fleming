@@ -1200,6 +1200,7 @@
 
   function vacuumTubeParts(spec) {
     const lines = [], circles = [], anchors = Object.create(null);
+    const labelHints = Object.create(null);
     const { grids = 1, cathode = 'heated', anodetype = 'plate', heater = true,
       split = 'none', width = TUBE_W, dual = false } = spec;
     const height = spec.height !== undefined ? spec.height
@@ -1235,6 +1236,11 @@
     anchors.NW = [-sq2, -TUBE_R + sq2];
     anchors.SE = [sq2, -TUBE_R - sq2];
     anchors.SW = [-sq2, -TUBE_R - sq2];
+    // TubeBase._draw_envelope sets the same hints for every tube width.
+    labelHints.NE = { ofst: [.12, .12], halign: 'left' };
+    labelHints.NW = { ofst: [-.12, .12], halign: 'right' };
+    labelHints.SE = { ofst: [.12, -.12], halign: 'left', valign: 'top' };
+    labelHints.SW = { ofst: [-.12, -.12], halign: 'right', valign: 'top' };
 
     const element = (cx, heightOfElement, id) => {
       const gridTop = -heightOfElement / 2 + Math.max(0, grids - 1) * TUBE_YGAP / 2;
@@ -1253,6 +1259,7 @@
       if (anodetype !== 'none') {
         lines.push({ pts: [[cx, 0], [cx, anodey]], lw: 2 });
         anchors[`anode${id}`] = [cx, 0];
+        labelHints[`anode${id}`] = { ofst: [.1, .1], halign: 'left', valign: 'bottom', fontsize: 11 };
       }
 
       const dashes = 3;
@@ -1266,9 +1273,25 @@
         if (grids === 1) {
           anchors[`grid${id}`] = [gridLeft - gridXGap, gy];
           anchors[`grid${id}_R`] = [gridRight + gridXGap, gy];
+          labelHints[`grid${id}`] = {
+            ofst: [(-width / 2 - gridLeft) / 36 + .1, .1],
+            halign: 'right', valign: 'bottom', fontsize: 11
+          };
+          labelHints[`grid${id}_R`] = {
+            ofst: [(width / 2 - gridRight) / 36 + .1, .1],
+            halign: 'left', valign: 'bottom', fontsize: 11
+          };
         } else {
           anchors[`grid${id}_${j + 1}`] = [gridLeft - gridXGap, gy];
           anchors[`grid${id}_${j + 1}R`] = [gridRight + gridXGap, gy];
+          labelHints[`grid${id}_${j + 1}`] = {
+            ofst: [(-width / 2 - gridLeft) / 36 + .1, .1],
+            halign: 'right', valign: 'bottom', fontsize: 11
+          };
+          labelHints[`grid${id}_${j + 1}R`] = {
+            ofst: [(width / 2 - gridRight) / 36 + .1, .1],
+            halign: 'left', valign: 'bottom', fontsize: 11
+          };
         }
       }
 
@@ -1278,12 +1301,16 @@
         lines.push({ pts: [[cx, catY - TUBE_DOT * 2], [cx, -heightOfElement]], lw: 2 });
         circles.push([cx, catY - TUBE_DOT, TUBE_DOT, 2]);
         anchors[`cathode${id}`] = [cx, -heightOfElement];
+        labelHints[`cathode${id}`] = { ofst: [.1, -.1], halign: 'left', valign: 'top', fontsize: 11 };
       } else if (cathode !== 'none') {
         lines.push({
           pts: [[gridLeft, catY - catDrop], [gridLeft, catY], [gridRight, catY], [gridRight, catY - catDrop]], lw: 2
         });
+        const cathodeHintY = (-heightOfElement - (catY - catDrop)) / 36;
         anchors[`cathode${id}`] = [gridLeft, catY - catDrop];
         anchors[`cathode${id}_R`] = [gridRight, catY - catDrop];
+        labelHints[`cathode${id}`] = { ofst: [-.1, cathodeHintY], halign: 'right', valign: 'top', fontsize: 11 };
+        labelHints[`cathode${id}_R`] = { ofst: [.1, cathodeHintY], halign: 'left', valign: 'top', fontsize: 11 };
       }
       return catY;
     };
@@ -1309,15 +1336,18 @@
       });
       anchors.heat1 = [heatLeft, heatBot];
       anchors.heat2 = [heatRight, heatBot];
+      labelHints.heat1 = { ofst: [-.1, 0], halign: 'right', valign: 'bottom', fontsize: 11 };
+      labelHints.heat2 = { ofst: [.1, 0], halign: 'left', valign: 'bottom', fontsize: 11 };
     }
 
-    return { lines, circles, anchors, height, width };
+    return { lines, circles, anchors, labelHints, height, width };
   }
 
   function nixieTubeParts(spec) {
     const { anodes = 3, cathode = 'T', anodetype = 'narrow', grid = false } = spec;
     const lines = [], circles = [];
     const anchors = Object.create(null);
+    const labelHints = Object.create(null);
     const height = TUBE_W;
     const width = Math.max(TUBE_W, (anodes - 1) * TUBE_AXGAP + TUBE_W);
     lines.push({
@@ -1342,6 +1372,8 @@
       }
       anchors.grid = [-anodeW / 2 - xgap, gy];
       anchors.grid_R = [anodeW / 2 + xgap, gy];
+      labelHints.grid = { ofst: [(-width / 2 + anodeW / 2) / 36, .1], halign: 'right', valign: 'bottom', fontsize: 11 };
+      labelHints.grid_R = { ofst: [(width / 2 - anodeW / 2) / 36, .1], halign: 'left', valign: 'bottom', fontsize: 11 };
     }
 
     const anodeY = -TUBE_W / 4;
@@ -1351,6 +1383,7 @@
       else lines.push({ pts: [[ax - TUBE_DOT, anodeY], [ax + TUBE_DOT, anodeY]], lw: 2 });
       lines.push({ pts: [[ax, 0], [ax, anodeY]], lw: 2 });
       anchors[`anode${i}`] = [ax, 0];
+      labelHints[`anode${i}`] = { ofst: [-.1, .1], halign: 'right', valign: 'bottom', fontsize: 11 };
     }
 
     const catY = -3 * TUBE_W / 4;
@@ -1370,7 +1403,7 @@
       lines.push({ pts: [[-anodeW / 2, catY], [anodeW / 2, catY]], lw: 2 });
       anchors.cathode = [0, -TUBE_W];
     }
-    return { lines, circles, anchors, height, width };
+    return { lines, circles, anchors, labelHints, height, width };
   }
 
   const componentDefinitions = {
@@ -2937,7 +2970,6 @@
       for (const key of ['contacts', 'nc', 'link']) if (options[key] === true) throw new Error(`${key} must be True or False.`);
       for (const key of ['at', 'to', 'tox', 'toy']) if (key in options && typeof options[key] !== 'string') throw new Error(`${key} must specify a terminal.`);
       if ('endpoints' in options && typeof options.endpoints !== 'string') throw new Error('endpoints must specify a start and end reference.');
-      if ('endpoints' in options && ['at', 'to', 'tox', 'toy'].some(key => key in options)) throw new Error('endpoints cannot be combined with at, to, tox, or toy.');
       // Schemdraw accepts .left()/.up()/.down()/.right() on every Element as a
       // drawing direction. The stand-alone symbols below only implement `theta`,
       // so map the keyword to the equivalent angle instead of rejecting it.
@@ -3282,7 +3314,10 @@
             heater: bool('heater', heaterDefault)
           });
           // Anchor aliases, mirroring the Python subclasses.
-          const alias = (from, to) => { if (parts.anchors[from]) parts.anchors[to] = parts.anchors[from]; };
+          const alias = (from, to) => {
+            if (parts.anchors[from]) parts.anchors[to] = parts.anchors[from];
+            if (parts.labelHints[from]) parts.labelHints[to] = parts.labelHints[from];
+          };
           if (type === 'Triode') {
             alias('grid', 'control'); alias('grid_R', 'control_R');
           }
@@ -3365,15 +3400,40 @@
 
         labels.forEach((label, i) => {
           if (label.rotate !== undefined) throw new Error(`${type} does not support label rotation.`);
-          const size = label.fontsize === undefined ? labelSize : label.fontsize;
           if (label.loc) {
             if (!Object.prototype.hasOwnProperty.call(parts.anchors, label.loc)) throw new Error(`Unknown ${type} label anchor: ${label.loc}`);
+            // TubeBase registers a _labelhints entry per terminal. A user
+            // `ofst` overrides the hint offset, while halign/valign still come
+            // from the hint unless the label sets them explicitly.
+            const hint = parts.labelHints[label.loc];
+            const size = label.fontsize === undefined
+              ? (hint && hint.fontsize !== undefined ? hint.fontsize : labelSize)
+              : label.fontsize;
+            const halign = label.halign || (hint && hint.halign) || 'center';
+            const valign = label.valign || (hint && hint.valign) || 'center';
+            let ox = 0, oy = 0.1;
+            if (label.ofst != null) {
+              if (Array.isArray(label.ofst)) [ox, oy] = label.ofst;
+              else {
+                [ox, oy] = {
+                  'center-bottom': [0, label.ofst], 'right-bottom': [-label.ofst, label.ofst],
+                  'right-center': [-label.ofst, 0], 'right-top': [-label.ofst, -label.ofst],
+                  'center-top': [0, -label.ofst], 'left-top': [label.ofst, -label.ofst],
+                  'left-center': [label.ofst, 0], 'left-bottom': [label.ofst, label.ofst]
+                }[`${halign}-${valign}`] || [0, label.ofst];
+              }
+            } else if (hint && hint.ofst) [ox, oy] = hint.ofst;
             const [px, py] = parts.anchors[label.loc];
-            const oy = label.ofst == null ? 3.6 : (Array.isArray(label.ofst) ? label.ofst[1] : label.ofst) * 36;
-            const [lx, ly] = tf([px, -py - oy]);
-            elements.push(`<text x="${lx}" y="${ly}" dominant-baseline="central" text-anchor="middle"${textFill} font-family="sans-serif" font-size="${size}"><tspan>${labelContent(label.text)}</tspan></text>`);
+            const [lx, ly] = tf([px + ox * 36, -py - oy * 36]);
+            const anchorText = { left: 'start', center: 'middle', right: 'end' }[halign];
+            const baseline = valign === 'center' ? 'central' : valign === 'top' ? 'hanging' : 'ideographic';
+            // SegmentText draws at the anchor with a tspan dy of one font size,
+            // so the text y attribute sits one line above the anchor.
+            const yAttr = ly - size;
+            elements.push(`<text x="${lx}" y="${yAttr}" text-anchor="${anchorText}" dominant-baseline="${baseline}"${textFill} font-family="sans-serif" font-size="${size}"><tspan x="${lx}" dy="${size}">${labelContent(label.text)}</tspan></text>`);
             return;
           }
+          const size = label.fontsize === undefined ? labelSize : label.fontsize;
           const [lx, ly] = tf([0, -0.1 * 36 - i * (size + 2)]);
           elements.push(`<text x="${lx}" y="${ly - size}" dominant-baseline="ideographic" text-anchor="middle"${textFill} font-family="sans-serif" font-size="${size}"><tspan>${labelContent(label.text)}</tspan></text>`);
         });
@@ -5072,7 +5132,7 @@
           if (!m) throw new Error('OrthoLines delta must be specified as delta="(dx dy)".');
           end = [x + readMove(m[1], unit), y - readMove(m[2], unit)];
         } else if ('to' in options) {
-          end = point(options.to);
+          end = atPoint(options.to);
         } else throw new Error('OrthoLines requires to or delta.');
         const originX = x, originY = -y;
         const ddx = end[0] - x, ddy = -end[1] - originY;
@@ -5130,7 +5190,7 @@
           const dx = readMove(m[1], unit), dy = readMove(m[2], unit);
           end = [x + dx, y - dy];
         } else if ('to' in options) {
-          const target = point(options.to);
+          const target = atPoint(options.to);
           end = [target[0] + offset('dx'), target[1] - offset('dy')];
         } else end = [108, 72];
         const dx = end[0] - x, dy = end[1] - y;
@@ -5545,15 +5605,15 @@
       if ('theta' in options) {
         if (type === 'Dot') throw new Error(`${type} does not support theta.`);
         if (typeof options.theta !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.theta) || !Number.isFinite(Number(options.theta))) throw new Error('theta must be a finite number.');
-        if (selectedDirection || 'endpoints' in options || 'to' in options || ('tox' in options && !(type in twoTerminalParts)) || ('toy' in options && !(type in twoTerminalParts) && type !== 'Line')) throw new Error('theta cannot be combined with a direction, endpoints, to, tox, or toy.');
       }
       if ('length' in options) {
         if (length !== null) throw new Error('Only one length may be specified.');
         if (typeof options.length !== 'string') throw new Error('A length value is required.');
         length = readLength(options.length, unit);
       }
-      if ('endpoints' in options && (['BjtNpn', 'Dot', 'Opamp', 'Ground'].includes(type) || selectedDirection || length !== null)) throw new Error(`${type} endpoints cannot be combined with the specified options.`);
+      if ('endpoints' in options && ['BjtNpn', 'Dot', 'Opamp', 'Ground'].includes(type)) throw new Error(`${type} endpoints cannot be combined with the specified options.`);
       if ('at' in options) [x, y] = atPoint(options.at);
+      const atPlacement = 'at' in options ? [x, y] : null;
       let definition = componentDefinitions[type];
       if (definition && definition.analog) {
         const bool = (key, fallback) => {
@@ -6926,26 +6986,52 @@
         if ('hold' in options) [x, y, direction] = previousState;
         continue;
       }
-      if (['to', 'tox', 'toy'].filter(key => key in options).length > 1) throw new Error('to, tox, and toy cannot be specified together.');
-      if ('anchor' in options && ['to', 'tox', 'toy', 'endpoints'].some(key => key in options)) throw new Error('anchor cannot be combined with to, tox, toy, or endpoints.');
-      if ((length !== null) && ('to' in options || (('tox' in options || 'toy' in options) && !('theta' in options)))) throw new Error(`A length cannot be combined with to/tox/toy (${type}).`);
       let targetPoint = null;
+      let targetDirectionOverridden = false;
+      let targetPointIsAbsolute = true;
       if ('to' in options || 'endpoints' in options) {
-        if ('endpoints' in options) {
-          const ref = '[A-Za-z_]\\w*\\.[A-Za-z_]\\w*';
-          const match = new RegExp(`^\\s*(${ref})\\s+(${ref})\\s*$`).exec(options.endpoints);
-          if (!match) throw new Error('endpoints must specify start and end references separated by whitespace.');
-          [x, y] = point(match[1]);
-          targetPoint = point(match[2]);
-        } else targetPoint = point(options.to);
-        const vx = targetPoint[0] - x, vy = targetPoint[1] - y;
+        const isEndpoints = 'endpoints' in options;
+        let targetStart = [x, y];
+        if (isEndpoints) {
+          // Schemdraw's Element2Term.endpoints() accepts named terminals and
+          // numeric coordinates. Each side is either a `(x y)` pair or a
+          // previously defined terminal reference. A length specified with
+          // `length=` is overridden by the distance between the endpoints.
+          const endpoint = '\\([^()]*\\)|[A-Za-z_]\\w*\\.[^\\s]+';
+          const match = new RegExp(`^\\s*(${endpoint})\\s+(${endpoint})\\s*$`).exec(options.endpoints);
+          if (!match) throw new Error('endpoints must specify two terminal references or (x y) coordinates separated by whitespace.');
+          targetStart = atPoint(match[1]);
+          targetPoint = atPoint(match[2]);
+          // In schemdraw, `at` still positions the element while `endpoints`
+          // only determine direction and length.
+          if (atPlacement) {
+            [x, y] = atPlacement;
+            targetPointIsAbsolute = false;
+          } else [x, y] = targetStart;
+        } else targetPoint = atPoint(options.to);
+        const vx = targetPoint[0] - targetStart[0], vy = targetPoint[1] - targetStart[1];
         length = Math.hypot(vx, vy);
         if (!Number.isFinite(length) || length === 0) throw new Error('Start and end points must be distinct finite positions.');
-        if (vy === 0) direction = vx < 0 ? 'left' : 'right';
-        else if (vx === 0) direction = vy < 0 ? 'up' : 'down';
-        else direction = Math.atan2(-vy, vx) * 180 / Math.PI;
+        let targetDirection;
+        if (vy === 0) targetDirection = vx < 0 ? 'left' : 'right';
+        else if (vx === 0) targetDirection = vy < 0 ? 'up' : 'down';
+        else targetDirection = Math.atan2(-vy, vx) * 180 / Math.PI;
+        if (isEndpoints) direction = targetDirection;
+        else if (selectedDirection) {
+          // Schemdraw's Element._place() lets a direction keyword override the
+          // angle implied by `to`; the distance to the target still sets length.
+          direction = selectedDirection;
+          targetDirectionOverridden = true;
+        } else if ('theta' in options) {
+          // Schemdraw lets an explicit theta override the angle implied by
+          // `to`; the distance to the target still sets length.
+          direction = Number(options.theta);
+          targetDirectionOverridden = true;
+        } else direction = targetDirection;
       } else if ('tox' in options) {
-        const target = point(options.tox)[0];
+        const target = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.tox)
+          ? Number(options.tox) * 36
+          : atPoint(options.tox)[0];
         if ('theta' in options) {
           // Schemdraw sets the length from the horizontal distance and the
           // angle, then places the element along theta: end = start + l·(cosθ, sinθ).
@@ -6957,8 +7043,14 @@
         } else {
           direction = target < x ? 'left' : 'right'; length = Math.abs(target - x);
         }
+        if (selectedDirection) {
+          direction = selectedDirection;
+          targetDirectionOverridden = true;
+        }
       } else if ('toy' in options) {
-        const target = point(options.toy)[1];
+        const target = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(options.toy)
+          ? -Number(options.toy) * 36
+          : atPoint(options.toy)[1];
         if ('theta' in options) {
           // Schemdraw sets the length from the vertical distance and the angle,
           // then places the element along theta.
@@ -6970,10 +7062,15 @@
         } else {
           direction = target < y ? 'up' : 'down'; length = Math.abs(target - y);
         }
-      } else if ('theta' in options) {
+        if (selectedDirection) {
+          direction = selectedDirection;
+          targetDirectionOverridden = true;
+        }
+      } else if (selectedDirection) direction = selectedDirection;
+      else if ('theta' in options) {
         const degrees = ((Number(options.theta) % 360) + 360) % 360;
         direction = ({ 0: 'right', 90: 'up', 180: 'left', 270: 'down' })[degrees] || Number(options.theta);
-      } else if (selectedDirection) direction = selectedDirection;
+      }
       else if (isSource || ['BjtNpn2', 'BjtPnp2', 'BjtPnp2c2', 'CurrentMirror', 'VoltageMirror', 'Nullator', 'Norator'].includes(type)) direction = 'up';
       if (length === null) length = unit;
       // When the length comes from a target point (to/tox/toy/endpoints) the
@@ -7030,8 +7127,8 @@
       const radians = arbitraryAngle ? direction * Math.PI / 180 : 0;
       const [dx, dy, angle] = arbitraryAngle ? [Math.cos(radians), -Math.sin(radians), -direction] : directions[direction];
       let startX = x, startY = y;
-      let endX = targetPoint ? targetPoint[0] : x + dx * length;
-      let endY = targetPoint ? targetPoint[1] : y + dy * length;
+      let endX = targetPoint && targetPointIsAbsolute && !targetDirectionOverridden ? targetPoint[0] : x + dx * length;
+      let endY = targetPoint && targetPointIsAbsolute && !targetDirectionOverridden ? targetPoint[1] : y + dy * length;
       let centerX = (x + endX) / 2, centerY = (y + endY) / 2;
       const bodyLength = partDef && partDef.form === 'glyph' ? partDef.half * 2 : ['BjtNpn2', 'BjtPnp2', 'BjtPnp2c2'].includes(type) ? 39.6 : ['NMos2', 'PMos2'].includes(type) ? 60 : ['NFet2', 'PFet2'].includes(type) ? 54 : ['JFetN2', 'JFetP2'].includes(type) ? 48 : type === 'CPE' ? 9 : type === 'Memristor2' ? 50.4 : type === 'Capacitor2' ? 6.48 : type === 'DiodeTVS' ? 25.2 : type === 'Josephson' ? 18 : type === 'Motor' ? 51.84 : ['BusLine', 'DataBusLine'].includes(type) ? 0 : ['Coax', 'Triax'].includes(type) ? length : ['CurrentMirror', 'VoltageMirror'].includes(type) ? 36 : type === 'Capacitor' ? 6.48 : ['Diode', 'DiodeTunnel', 'DiodeShockley', 'Zener', 'LED', 'Diac', 'SCR', 'Triac'].includes(type) ? 12.6 : type === 'Line' ? 0 : batterySpan || 36;
       // Gap labels are anchored to the terminal span, not the shifted body.

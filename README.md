@@ -1,6 +1,6 @@
 # Fleming
 
-A lightweight notation for drawing circuit diagrams using nothing but Markdown code fences, plus a JavaScript renderer that converts the notation to SVG. The notation, shapes, and terminals follow the design of schemdraw 0.23. The renderer is self-contained in `src/fleming.js` and requires no external libraries.
+A lightweight notation for drawing circuit diagrams using nothing but Markdown code fences, plus a JavaScript renderer that converts the notation to SVG. The notation, shapes, and terminals follow the design of schemdraw 0.23. The renderer is self-contained in `fleming.js` and requires no external libraries.
 
 This README is a reference for the notation and components. It does not cover how to build individual circuits or include circuit examples.
 
@@ -12,7 +12,7 @@ fleming.js is under development. Not every combination of components and argumen
 - Components are connected in a chain, one component per line, with direction, length, labels, and terminal references.
 - Multiple circuits can be written in one fence; `@layout`, `@title`, and `@scale` control placement, titles, and display scale.
 - `@subcircuit` lets you package and reuse parts of a drawing.
-- The renderer is a single file, `src/fleming.js`, with no external dependencies.
+- The renderer is a single file, `fleming.js`, with no external dependencies.
 
 ---
 
@@ -32,10 +32,10 @@ fleming.js is under development. Not every combination of components and argumen
 
 ### 1.1 Using it on a web page
 
-Load `src/fleming.js` and pass a fleming source string to `Fleming.render()`. The return value is an SVG string. Pass the contents of the code fence (the `circuit` blocks and `@` directives), without the fence markers themselves.
+Load `fleming.js` and pass a fleming source string to `Fleming.render()`. The return value is an SVG string. Pass the contents of the code fence (the `circuit` blocks and `@` directives), without the fence markers themselves.
 
 ```html
-<script src="src/fleming.js"></script>
+<script src="fleming.js"></script>
 ```
 
 ```js

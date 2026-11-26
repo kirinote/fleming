@@ -34,6 +34,8 @@ fleming.js is under development. Not every combination of components and argumen
 
 Load `fleming.js` and pass a fleming source string to `Fleming.render()`. The return value is an SVG string. Pass the contents of the code fence (the `circuit` blocks and `@` directives), without the fence markers themselves.
 
+`fleming.js` is a single classic script. It can be loaded directly from a local HTML file opened with `file://`; no local HTTP server, bundler, or ES module setup is required. All drawing data is contained in the file itself, so no other resources are fetched.
+
 ```html
 <script src="fleming.js"></script>
 ```

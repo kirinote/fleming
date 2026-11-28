@@ -872,9 +872,11 @@
   }
 
   // Local anchors of a two-terminal element, in the element's unrotated SVG
-  // frame (x along the element, y down). `reverse` mirrors x about the body
-  // centre and `sy` is -1 for `flip`, matching the drawing code below.
-  // The points here are also used to publish a named element's anchors.
+  // frame (x along the element from start to end, y down). `reverse` mirrors x
+  // about the body centre and `sy` is -1 for `flip`, matching the drawing code.
+  // Every terminal beyond start/end/center is defined here and nowhere else:
+  // `anchor=` placement, the contact dots and the anchors a named block exposes
+  // all read this one table, so they cannot drift apart.
   function twoTerminalLocalAnchors(type, length, shiftOffset, sy, options, extra = {}) {
     const bodyCenter = length / 2 + shiftOffset;
     const reverse = 'reverse' in options;
@@ -897,7 +899,7 @@
     }
     if (type === 'SCR') points.gate = [mx(bodyCenter + 17.1), 18 * sy];
     if (type === 'Triac') points.gate = [mx(bodyCenter + 24.3), -18 * sy];
-    if (type === 'BatteryDouble') points.tap = [bodyCenter - batterySpan / 2 + 27, -13.5 * sy];
+    if (type === 'BatteryDouble') points.tap = [mx(bodyCenter - batterySpan / 2 + 27), -13.5 * sy];
     if (type === 'BjtNpn2' || type === 'BjtPnp2' || type === 'BjtPnp2c2') {
       points.base = [bodyCenter, -28.62 * sy];
       const emitterAtEnd = (type !== 'BjtNpn2') !== reverse;
@@ -980,12 +982,13 @@
     }
     if (type === 'Inductor2') {
       const a = bodyCenter - 18, b = bodyCenter + 18;
-      // Schemdraw: NE/NW at +ind_w+coregap (negative y in its y-up frame),
-      // SE/SW at -ind_w. On screen (y down) that is the opposite sign.
-      points.NW = [mx(a), 22.32 * sy];
-      points.NE = [mx(b), 22.32 * sy];
-      points.SW = [mx(a), -18 * sy];
-      points.SE = [mx(b), -18 * sy];
+      // Schemdraw: NE/NW at ind_w + coregap = 0.62 above the axis in its y-up
+      // frame, SE/SW at -ind_w = -0.5. Screen y grows downward, so NE/NW sit at
+      // -22.32 px and SE/SW at +18 px.
+      points.NW = [mx(a), -22.32 * sy];
+      points.NE = [mx(b), -22.32 * sy];
+      points.SW = [mx(a), 18 * sy];
+      points.SE = [mx(b), 18 * sy];
       points.istart = [a, 0];
       points.iend = [b, 0];
       points.xy = [a, 0];
@@ -7353,7 +7356,10 @@
           return `<path d="M ${fx},${fy} L ${tipX},${tipY}" ${stroke}/><path d="M ${tipX},${tipY} L ${bx - 3.6 * uy},${by + 3.6 * ux} L ${bx + 3.6 * uy},${by - 3.6 * ux} Z" fill="${color}"/>`;
         };
         let glyph = `<path d="M 0,0 L ${a},0 L ${diagL},${barY} L ${diagR},${barY} L ${b},0 L ${length},0 M ${barA},${barY} L ${barB},${barY} M ${c},${barY} L ${c},${baseY}" ${stroke}/>`;
-        glyph += type === 'BjtNpn2' ? arrow(a, 0, diagL, barY) : arrow(diagR, barY, b, 0);
+        // Schemdraw 0.22 reversed the emitter arrow on BjtNpn2/BjtPnp2 (and
+        // inherited BjtPnp2c2). Keep the 0.21 orientation until the upstream
+        // fix lands; see reference/version_pins.json.
+        glyph += type === 'BjtNpn2' ? arrow(diagL, barY, a, 0) : arrow(b, 0, diagR, barY);
         if (type === 'BjtPnp2c2') {
           // Second collector: a short diagonal from the C2 tap to the base bar.
           glyph += `<path d="M ${a + 9},0 L ${a + 21.6},${barY}" ${stroke}/>`;
@@ -7522,7 +7528,6 @@
         shapeExtra = reverseGroup(`<path d="${barsPath}" ${stroke}/>`, length / 2 + shiftOffset);
       }
       let shape, fixedText = '';
-      const dpAnchors = {};
       if (partDef && partDef.form === 'glyph') {
         const c = length / 2 + shiftOffset;
         const sx = 'reverse' in options ? -1 : 1;
@@ -8151,136 +8156,18 @@
       if (name) {
         const anchors = { start: [startX, startY], end: [endX, endY], center: [centerX, centerY] };
         const local = (lx, ly) => [x + dx * lx - dy * ly, y + dy * lx + dx * ly];
-        const bodyCenter = length / 2 + shiftOffset;
-        const mx = lx => 'reverse' in options ? 2 * bodyCenter - lx : lx;
-        if (['Potentiometer', 'PotentiometerIEC', 'PotentiometerIEEE'].includes(type)) anchors.tap = local(mx(bodyCenter), -tapH * zoom * sy);
-        if (type === 'Rshunt') { anchors.v1 = local(mx(bodyCenter - 31.5), 18 * sy); anchors.v2 = local(mx(bodyCenter + 31.5), 18 * sy); }
-        if (type === 'SCR') anchors.gate = local(mx(bodyCenter + 17.1), 18 * sy);
-        if (type === 'Triac') anchors.gate = local(mx(bodyCenter + 24.3), -18 * sy);
-        if (type === 'BatteryDouble') anchors.tap = local(mx(bodyCenter - batterySpan / 2 + 27), -13.5 * sy);
-        if (type === 'BjtNpn2' || type === 'BjtPnp2' || type === 'BjtPnp2c2') {
-          anchors.base = local(bodyCenter, -28.62 * sy);
-          const emitterAtEnd = (type !== 'BjtNpn2') !== ('reverse' in options);
-          anchors.emitter = emitterAtEnd ? [endX, endY] : [startX, startY];
-          anchors.collector = emitterAtEnd ? [startX, startY] : [endX, endY];
-          if (type === 'BjtPnp2c2') anchors.C2 = local(bodyCenter + ('reverse' in options ? 10.8 : -10.8), 0);
+        // Extra terminals come from twoTerminalLocalAnchors(), the same table
+        // that drives `anchor=` placement and the contact dots, so a named
+        // block cannot expose a terminal at a different point than the one the
+        // renderer uses internally. start/end/center are already world points.
+        const localAnchors = twoTerminalLocalAnchors(type, length, shiftOffset, sy, options, {
+          tapH, zoom, batterySpan, coaxRadius, coaxLead,
+          triaxLead, triaxR1, triaxR2, triaxOfsStart, triaxOfsEnd, bulk
+        });
+        for (const [key, [lx, ly]] of Object.entries(localAnchors)) {
+          if (key === 'start' || key === 'end' || key === 'center') continue;
+          anchors[key] = local(lx, ly);
         }
-        if (type === 'NMos2' || type === 'PMos2') {
-          const gateOffset = (type === 'NMos2' ? 12 : -12) * ('reverse' in options ? -1 : 1);
-          anchors.gate = local(bodyCenter + gateOffset, 30 * sy);
-          const sourceAtBodyEnd = (type === 'NMos2') !== ('reverse' in options);
-          anchors.source = local(sourceAtBodyEnd ? bodyCenter + 30 : bodyCenter - 30, 0);
-          anchors.drain = local(sourceAtBodyEnd ? bodyCenter - 30 : bodyCenter + 30, 0);
-          anchors.S = anchors.source;
-          anchors.D = anchors.drain;
-        }
-        if (type === 'NFet2' || type === 'PFet2') {
-          const sourceAtEnd = !('reverse' in options);
-          anchors.gate = local(bodyCenter, -49.2 * sy);
-          anchors.source = sourceAtEnd ? [endX, endY] : [startX, startY];
-          anchors.drain = sourceAtEnd ? [startX, startY] : [endX, endY];
-          anchors.S = anchors.source;
-          anchors.D = anchors.drain;
-          if (bulk) anchors.bulk = local(bodyCenter, 0);
-        }
-        if (type === 'JFetN2' || type === 'JFetP2') {
-          const gateOffset = 9 * ('reverse' in options ? -1 : 1);
-          anchors.gate = local(bodyCenter + gateOffset, -33 * sy);
-          const sourceAtEnd = !('reverse' in options);
-          anchors.source = sourceAtEnd ? [endX, endY] : [startX, startY];
-          anchors.drain = sourceAtEnd ? [startX, startY] : [endX, endY];
-          anchors.S = anchors.source;
-          anchors.D = anchors.drain;
-        }
-        if (type === 'CurrentMirror' || type === 'VoltageMirror') {
-          const offset = type === 'CurrentMirror'
-            ? Math.sqrt(0.3 * 0.3 - 0.2 * 0.2) * 36
-            : Math.sqrt(1 - 0.2 * 0.2 / (0.3 * 0.3)) * 0.15 * 36;
-          anchors.common = local(bodyCenter, -offset * sy);
-        }
-        if (type === 'SwitchSpdt') {
-          // Schemdraw: a at the pivot, b on the second throw, c on the throw
-          // above (flip/reverse move them with the glyph).
-          const contacts = !('contacts' in options) || options.contacts === 'True';
-          const a = contacts ? bodyCenter - 13.68 : bodyCenter - 18;
-          const b = contacts ? bodyCenter + 13.68 : bodyCenter + 18;
-          anchors.a = local(mx(a), 0);
-          anchors.b = local(mx(b), 0);
-          anchors.c = local(mx(b), -25.2 * sy);
-        }
-        if (type === 'SwitchSpdt2') {
-          const contacts = options.contacts !== false;
-          const left = contacts ? bodyCenter - 49.68 : bodyCenter - 54;
-          const right = contacts ? bodyCenter - 22.32 : bodyCenter - 18;
-          anchors.a = local(mx(left), 0);
-          anchors.b = local(mx(right), -14.4 * sy);
-          anchors.c = local(mx(right), 14.4 * sy);
-        }
-        if (type === 'SwitchDpst' || type === 'SwitchDpdt') {
-          // Pole 1 sits on the terminal line, pole 2 one unit below it. The
-          // body is drawn centred at x = 54 with the poles at 4.32/31.68, so
-          // the anchors use the same offsets and follow flip via `sy`.
-          const contacts = options.contacts !== false;
-          const dpdt = type === 'SwitchDpdt';
-          const pole2 = dpdt ? 50.4 : 36;
-          const right = contacts ? 31.68 : 36;
-          // Positions are relative to the first pole (x = 4.32, y = 0).
-          const px = contacts ? 4.32 : 0;
-          const ax = lx => mx(bodyCenter - 54 + px + (lx - 4.32));
-          dpAnchors.p1 = local(ax(4.32), 0);
-          dpAnchors.t1 = local(ax(right - px + 4.32), dpdt ? -14.4 * sy : 0);
-          if (dpdt) dpAnchors.t2 = local(ax(right - px + 4.32), 14.4 * sy);
-          dpAnchors.p2 = local(ax(4.32), pole2 * sy);
-          if (!dpdt) dpAnchors.t2 = local(ax(right - px + 4.32), pole2 * sy);
-          dpAnchors.t3 = local(ax(right - px + 4.32), dpdt ? (pole2 - 14.4) * sy : pole2 * sy);
-          if (dpdt) dpAnchors.t4 = local(ax(right - px + 4.32), (pole2 + 14.4) * sy);
-        }
-        if (type === 'MeterArrow') {
-          anchors.istart = local(bodyCenter - 18, 0);
-          anchors.iend = local(bodyCenter + 18, 0);
-        }
-        if (type === 'Inductor') {
-          // Schemdraw: NE/NW at ind_w + coregap = 0.37 above the axis in its
-          // y-up frame, SE/SW at -ind_w = -0.25. Screen y is inverted.
-          const a = bodyCenter - 18, b = bodyCenter + 18;
-          anchors.NW = local(mx(a), -13.32 * sy);
-          anchors.NE = local(mx(b), -13.32 * sy);
-          anchors.SW = local(mx(a), 9 * sy);
-          anchors.SE = local(mx(b), 9 * sy);
-        }
-        if (type === 'Inductor2') {
-          const a = bodyCenter - 18, b = bodyCenter + 18;
-          anchors.NW = local(mx(a), -22.32 * sy);
-          anchors.NE = local(mx(b), -22.32 * sy);
-          anchors.SW = local(mx(a), 18 * sy);
-          anchors.SE = local(mx(b), 18 * sy);
-          anchors.istart = local(a, 0);
-          anchors.iend = local(b, 0);
-          anchors.xy = local(a, 0);
-        }
-        if (type === 'Coax') {
-          const L = length, l = coaxLead, r = coaxRadius;
-          anchors.shieldstart = local(mx(l), r * sy);
-          anchors.shieldstart_top = local(mx(l), -r * sy);
-          anchors.shieldend = local(mx(L - l), r * sy);
-          anchors.shieldend_top = local(mx(L - l), -r * sy);
-          anchors.shieldcenter = local(mx(L / 2), r * sy);
-          anchors.shieldcenter_top = local(mx(L / 2), -r * sy);
-        }
-        if (type === 'Triax') {
-          const L = length, l = triaxLead, r1 = triaxR1, r2 = triaxR2, os = triaxOfsStart, oe = triaxOfsEnd;
-          anchors.guardstart = local(mx(l), r1 * sy);
-          anchors.guardstart_top = local(mx(l), -r1 * sy);
-          anchors.guardend = local(mx(L - l), r1 * sy);
-          anchors.guardend_top = local(mx(L - l), -r1 * sy);
-          anchors.shieldstart = local(mx(l + os), r2 * sy);
-          anchors.shieldstart_top = local(mx(l + os), -r2 * sy);
-          anchors.shieldend = local(mx(L - l - oe), r2 * sy);
-          anchors.shieldend_top = local(mx(L - l - oe), -r2 * sy);
-          anchors.shieldcenter = local(mx(L / 2), r2 * sy);
-          anchors.shieldcenter_top = local(mx(L / 2), -r2 * sy);
-        }
-        Object.assign(anchors, dpAnchors);
         names[name] = anchors;
         namedTypes[name] = type;
         namedDirs[name] = [dx, dy];
